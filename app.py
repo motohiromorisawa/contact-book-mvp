@@ -4,13 +4,17 @@ import anthropic
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import datetime
+import pytz
 
 # ---------------------------------------------------------
 # 1. 設定
 # ---------------------------------------------------------
-st.set_page_config(page_title="連絡帳ドラフト生成", layout="wide")
+st.set_page_config(page_title="連絡帳メーカー (蓄積型)", layout="wide")
 
-# APIキー設定 (Streamlit Secretsより)
+# JSTタイムゾーン設定
+JST = pytz.timezone('Asia/Tokyo')
+
+# APIキー設定
 if "OPENAI_API_KEY" in st.secrets:
     openai.api_key = st.secrets["OPENAI_API_KEY"]
 if "ANTHROPIC_API_KEY" in st.secrets:
@@ -30,10 +34,7 @@ def get_gsp_service():
 # 2. コア機能
 # ---------------------------------------------------------
 def transcribe_audio(audio_file):
-    """
-    Whisper API (v1) を使用。
-    ※Streamlit CloudのCPU負荷を避けるため、whisper.cppではなくAPIを利用
-    """
+    """Whisper APIで音声認識"""
     try:
         transcript = openai.audio.transcriptions.create(
             model="whisper-1", 
@@ -45,107 +46,140 @@ def transcribe_audio(audio_file):
         st.error(f"音声認識エラー: {e}")
         return None
 
-def generate_draft(input_text):
-    """
-    Claude 4.5 Sonnet を使用してドラフト生成
-    """
-    MODEL_NAME = "claude-sonnet-4-5-20250929" 
-
-    system_prompt = """
-    あなたは放課後等デイサービスの熟練職員です。
-    入力された音声テキスト（散文・箇条書き）から、保護者に渡す「連絡帳のドラフト」と「職員用記録」を作成してください。
-    
-    # 条件
-    - 「事実」と「解釈」を高度に区別しつつ、保護者には情緒的なつながりを伝える。
-    - ネガティブな事実はリフレーミングし、発達的視点からの肯定的な解釈を加える。
-    - 常同行動（回転など）は「没頭」「探究」といった強みとして表現する。
-    - 入力にない情報は絶対に捏造しない。文脈補完が必要な場合は[ ]で確認を促すこと。
-    """
-    
-    try:
-        message = anthropic_client.messages.create(
-            model=MODEL_NAME,
-            max_tokens=2000, # 4.5の表現力を活かすため少し増枠
-            temperature=0.3,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": f"以下の音声メモから連絡帳を作ってください：\n\n{input_text}"}
-            ]
-        )
-        return message.content[0].text
-    except Exception as e:
-        st.error(f"生成エラー (Model: {MODEL_NAME}): {e}")
-        return None
-
-def save_to_sheet(room_id, original_text, draft_text):
+def save_memo(room_id, memo_text):
+    """断片的なメモをシートに保存 (Draft列は空にする)"""
     service = get_gsp_service()
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    values = [[now, room_id, original_text, draft_text]]
+    now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+    # 保存形式: [日時, RoomID, メモ内容, "MEMO"(識別用)]
+    values = [[now, room_id, memo_text, "MEMO"]]
     body = {'values': values}
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D",
         valueInputOption="USER_ENTERED", body=body
     ).execute()
 
-def fetch_latest_draft(room_id):
+def fetch_todays_memos(room_id):
+    """今日のメモを全て取得して連結する"""
     service = get_gsp_service()
     sheet = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D"
     ).execute()
     rows = sheet.get('values', [])
-    for row in reversed(rows):
+    
+    today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
+    memos = []
+    
+    for row in rows:
+        # 行の長さチェック & RoomIDチェック
         if len(row) >= 4 and row[1] == room_id:
-            return row[2], row[3]
-    return None, None
+            # 日付チェック (タイムスタンプの前半部分で判定)
+            if row[0].startswith(today_str):
+                # タイプが"MEMO"のものだけ抽出
+                if row[3] == "MEMO":
+                    memos.append(f"- {row[0][11:16]} : {row[2]}") # 時間: 内容
+    
+    return "\n".join(memos)
+
+def generate_final_report(room_id, combined_text):
+    """集まったメモから最終レポートを生成"""
+    MODEL_NAME = "claude-3-5-sonnet-20241022"
+
+    system_prompt = """
+    あなたは放課後等デイサービスの熟練職員です。
+    提供されたテキストは、一日の中で断続的に記録された**「観察メモの集合（時系列）」**です。
+    これらを統合し、一日の活動の流れが見えるような「連絡帳」と「職員用記録」を作成してください。
+
+    # 条件
+    - 時系列の断片情報を、自然なストーリーとして繋げること。
+    - 「事実」と「解釈」を区別し、保護者には子供の肯定的な姿（リフレーミング）を伝える。
+    - メモに記載のない情報は捏造しない。
+    - 出力形式はMarkdownで見やすく整形する。
+    """
+    
+    try:
+        message = anthropic_client.messages.create(
+            model=MODEL_NAME,
+            max_tokens=2000,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": f"以下のメモを統合して連絡帳を作ってください：\n\n{combined_text}"}
+            ]
+        )
+        
+        # 生成結果をシートに保存（タイプを"REPORT"にする）
+        service = get_gsp_service()
+        now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        # 保存形式: [日時, RoomID, 元のメモまとめ, 生成されたレポート]
+        values = [[now, room_id, combined_text, message.content[0].text]]
+        body = {'values': values}
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D",
+            valueInputOption="USER_ENTERED", body=body
+        ).execute()
+        
+        return message.content[0].text
+        
+    except Exception as e:
+        st.error(f"生成エラー: {e}")
+        return None
 
 # ---------------------------------------------------------
 # 3. UI
 # ---------------------------------------------------------
-st.title("📝 親の実践サポート：連絡帳メーカー")
-
+st.title("📝 連絡帳メーカー (蓄積モード)")
 room_id = st.text_input("合言葉 (Room ID)", value="room1")
 
-tab1, tab2 = st.tabs(["📱 スマホ入力", "💻 PC確認・編集"])
+# 今日のメモを表示するためのコンテナ
+if "memos_preview" not in st.session_state:
+    st.session_state.memos_preview = ""
+
+tab1, tab2 = st.tabs(["🎙️ メモを追加 (現場用)", "📑 日報作成 (まとめ用)"])
 
 with tab1:
-    st.info("💡 下のマイクボタンを押して話しかけるか、録音ファイルをアップロードしてください。")
+    st.info("💡 気づいた時に何度でも録音してください。データは蓄積されます。")
     
-    # 音声入力手段を2つ用意（マイク入力 OR ファイルアップロード）
-    audio_input = st.audio_input("マイクボタンを押して録音開始")
-    audio_upload = st.file_uploader("または録音ファイルをアップロード", type=["m4a", "mp3", "wav"])
+    audio_input = st.audio_input("マイクボタンでメモを追加")
+    audio_upload = st.file_uploader("またはファイルをアップロード", type=["m4a", "mp3", "wav"], key="uploader")
     
-    # どちらかの入力があれば処理対象とする
-    audio_file = audio_input if audio_input else audio_upload
+    target_audio = audio_input if audio_input else audio_upload
     
-    if audio_file is not None:
-        # ボタンを押さなくても、録音完了したら即座に処理開始するフローに変更も可能ですが、
-        # 誤動作防止のためボタン制を維持します。
-        if st.button("魔法をかける (AI処理開始)"):
-            with st.spinner("音声を文字に変換中..."):
-                text = transcribe_audio(audio_file)
+    if target_audio:
+        if st.button("メモを保存", type="primary"):
+            with st.spinner("文字起こし中..."):
+                text = transcribe_audio(target_audio)
             
             if text:
-                st.success("聞き取り完了")
-                with st.expander("認識されたテキスト"):
-                    st.write(text)
-                
-                with st.spinner("Claude 4.5 Sonnet が執筆中..."):
-                    draft = generate_draft(text)
-                
-                if draft:
-                    st.success("作成完了！PCタブで確認してください。")
-                    save_to_sheet(room_id, text, draft)
+                save_memo(room_id, text)
+                st.success(f"保存しました！: 「{text}」")
+                st.toast("メモを追加しました", icon="✅")
+
+    # 現在の蓄積状況を表示
+    st.divider()
+    st.caption("📝 今日のメモ一覧")
+    if st.button("メモ状況を更新"):
+        st.session_state.memos_preview = fetch_todays_memos(room_id)
+    
+    if st.session_state.memos_preview:
+        st.text_area("蓄積されたメモ", st.session_state.memos_preview, height=200, disabled=True)
+    else:
+        st.write("（まだメモはありません。上のボタンで更新してください）")
 
 with tab2:
-    if st.button("最新のドラフトを取得"):
-        original, draft = fetch_latest_draft(room_id)
-        if draft:
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.caption("元の音声テキスト")
-                st.info(original)
-            with col2:
-                st.caption("生成された連絡帳")
-                st.text_area("エディタ", draft, height=500)
+    st.write("一日の終わりに、蓄積されたメモから連絡帳を作成します。")
+    
+    if st.button("🚀 AI連絡帳を作成する"):
+        memos = fetch_todays_memos(room_id)
+        
+        if not memos:
+            st.error("今日のメモがまだありません。")
         else:
-            st.warning("データが見つかりません。")
+            st.info(f"以下のメモをもとに作成します...\n{memos}")
+            with st.spinner("Claudeが思考中...複数のエピソードを統合しています..."):
+                report = generate_final_report(room_id, memos)
+            
+            if report:
+                st.success("作成完了！")
+                st.markdown("### 完成した連絡帳")
+                st.markdown(report)
+                st.caption("※この内容はスプレッドシートにも保存されました")
