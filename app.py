@@ -11,6 +11,24 @@ import pytz
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー (現場用)", layout="wide")
 
+# CSSでマイクボタンを巨大化させるハック
+st.markdown("""
+<style>
+    /* 音声入力ウィジェットのボタンを巨大化 */
+    [data-testid="stAudioInput"] button {
+        width: 100% !important;
+        height: 100px !important;
+        font-size: 2rem !important;
+        background-color: #FFEBEE !important; /* 薄い赤色で目立たせる */
+        border-radius: 20px !important;
+    }
+    /* 録音完了後の波形表示エリアも見やすく */
+    [data-testid="stAudioInput"] {
+        margin-bottom: 20px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # JSTタイムゾーン設定
 JST = pytz.timezone('Asia/Tokyo')
 
@@ -70,11 +88,8 @@ def fetch_todays_memos(child_id):
     memos = []
     
     for row in rows:
-        # 行の長さチェック
         if len(row) >= 4:
-            # IDチェック (完全一致) AND 日付チェック (前方一致) AND タイプチェック
             if row[1] == child_id and row[0].startswith(today_str) and row[3] == "MEMO":
-                # 時間(HH:MM)だけ切り出して表示
                 time_part = row[0][11:16]
                 memos.append(f"- {time_part} : {row[2]}")
     
@@ -82,7 +97,7 @@ def fetch_todays_memos(child_id):
 
 def generate_final_report(child_id, combined_text):
     """集まったメモから最終レポートを生成"""
-    # 動作確認済みのモデルID
+    # 指定されたモデルID
     MODEL_NAME = "claude-sonnet-4-5-20250929"
 
     system_prompt = f"""
@@ -108,7 +123,6 @@ def generate_final_report(child_id, combined_text):
             ]
         )
         
-        # 生成結果を保存
         service = get_gsp_service()
         now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
         values = [[now, child_id, combined_text, message.content[0].text]]
@@ -121,7 +135,7 @@ def generate_final_report(child_id, combined_text):
         return message.content[0].text
         
     except Exception as e:
-        st.error(f"生成エラー: {e}")
+        st.error(f"生成エラー (Model: {MODEL_NAME}): {e}")
         return None
 
 # ---------------------------------------------------------
@@ -129,34 +143,40 @@ def generate_final_report(child_id, combined_text):
 # ---------------------------------------------------------
 st.title("📝 連絡帳メーカー (現場用)")
 
-# 複数人対応のため、ラベルを明確化
-child_id = st.text_input("児童の名前またはID (例: いっくん)", value="いっくん")
+child_id = st.text_input("児童の名前またはID", value="いっくん")
 
-# セッション状態の初期化
 if "memos_preview" not in st.session_state:
     st.session_state.memos_preview = ""
+
+# マイクウィジェットを強制リセットするためのカウンター
+if "audio_key" not in st.session_state:
+    st.session_state.audio_key = 0
 
 tab1, tab2 = st.tabs(["🎙️ メモ入力", "📑 連絡帳作成"])
 
 with tab1:
-    st.info(f"💡 「{child_id}」さんの記録を追加します。マイクボタンを押して話してください。")
+    st.info(f"💡 「{child_id}」さんの記録を追加します。下の大きなボタンを押して録音してください。")
     
-    # ファイルアップロードを削除し、マイク入力のみに
-    audio_input = st.audio_input("録音ボタン")
+    # keyに数値を渡すことで、数値を変更した時にウィジェットを強制リセットできる
+    audio_val = st.audio_input("録音", key=f"recorder_{st.session_state.audio_key}")
     
-    if audio_input:
-        if st.button("このメモを保存", type="primary"):
+    # 録音が完了し、データが存在する時だけ保存ボタンを表示する
+    if audio_val:
+        st.success("録音完了！保存ボタンを押してください。")
+        if st.button("このメモを保存する (Save)", type="primary", use_container_width=True):
             with st.spinner("文字に変換中..."):
-                text = transcribe_audio(audio_input)
+                text = transcribe_audio(audio_val)
             
             if text:
                 save_memo(child_id, text)
-                st.success(f"保存しました: {text}")
-                st.toast("メモを追加しました", icon="✅")
+                st.toast(f"保存しました: {text}", icon="✅")
+                
+                # 保存成功後、キーを更新してマイク入力をリセット（空にする）
+                st.session_state.audio_key += 1
+                st.rerun()
 
     st.divider()
     
-    # 今日のメモ確認エリア
     col1, col2 = st.columns([2, 1])
     with col1:
         st.caption(f"📝 {child_id}さんの今日のメモ")
@@ -172,7 +192,7 @@ with tab1:
 with tab2:
     st.write(f"蓄積されたメモから、{child_id}さんの連絡帳を作成します。")
     
-    if st.button("🚀 連絡帳を作成する"):
+    if st.button("🚀 連絡帳を作成する", type="primary"):
         memos = fetch_todays_memos(child_id)
         
         if not memos:
