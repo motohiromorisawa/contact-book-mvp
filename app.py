@@ -9,38 +9,7 @@ import pytz
 # ---------------------------------------------------------
 # 1. 設定
 # ---------------------------------------------------------
-st.set_page_config(page_title="連絡帳メーカー (現場用)", layout="wide")
-
-# CSSハック：マイクボタンを強制的に巨大化・スマホ最適化
-st.markdown("""
-<style>
-    /* マイクボタンのコンテナ */
-    [data-testid="stAudioInput"] {
-        width: 100% !important;
-    }
-    
-    /* 録音ボタンそのものを巨大化 */
-    [data-testid="stAudioInput"] button {
-        width: 100% !important;
-        height: 80px !important;
-        font-size: 1.5rem !important;
-        background-color: #f0f2f6 !important;
-        border: 2px solid #4CAF50 !important; /* 緑枠で目立たせる */
-        border-radius: 12px !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
-    }
-    
-    /* 録音中の赤いアイコンを目立たせる */
-    [data-testid="stAudioInput"] button span {
-        font-weight: bold !important;
-    }
-    
-    /* 処理中のスピナーを中央に */
-    .stSpinner {
-        text-align: center;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="連絡帳メーカー", layout="wide")
 
 # JSTタイムゾーン設定
 JST = pytz.timezone('Asia/Tokyo')
@@ -81,6 +50,7 @@ def save_memo(child_id, memo_text):
     """断片的なメモをシートに保存"""
     service = get_gsp_service()
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+    # 保存形式: [日時, 児童ID, メモ内容, "MEMO"]
     values = [[now, child_id, memo_text, "MEMO"]]
     body = {'values': values}
     service.spreadsheets().values().append(
@@ -103,25 +73,24 @@ def fetch_todays_memos(child_id):
         if len(row) >= 4:
             if row[1] == child_id and row[0].startswith(today_str) and row[3] == "MEMO":
                 time_part = row[0][11:16]
-                memos.append(f"- {time_part} : {row[2]}")
+                memos.append(f"{time_part} {row[2]}")
     
     return "\n".join(memos)
 
 def generate_final_report(child_id, combined_text):
     """集まったメモから最終レポートを生成"""
-    # 指定されたモデルID
+    # 動作確認済みのモデルID
     MODEL_NAME = "claude-sonnet-4-5-20250929"
 
     system_prompt = f"""
-    あなたは放課後等デイサービスの熟練職員です。
-    児童（ID: {child_id}）に関する断続的な観察メモ（時系列）から、
-    保護者へ渡す「連絡帳」と、内部用の「業務記録」を作成してください。
+    あなたは放課後等デイサービスの職員です。
+    児童（ID: {child_id}）の観察メモから、保護者用連絡帳と業務記録を作成してください。
 
     # 条件
-    - 断片的な情報を、一日の自然なストーリーとして統合する。
-    - 「事実」と「解釈」を区別する。
-    - 保護者向けには、ネガティブな事実もリフレーミングし、子供の成長や肯定的な姿として伝える。
-    - メモにない情報は捏造しない。
+    - 断片情報を時系列に沿って統合する。
+    - 事実と解釈を区別する。
+    - 保護者向け：ネガティブな事実はリフレーミングし、肯定的な姿として伝える。
+    - 捏造しない。
     """
     
     try:
@@ -147,15 +116,16 @@ def generate_final_report(child_id, combined_text):
         return message.content[0].text
         
     except Exception as e:
-        st.error(f"生成エラー (Model: {MODEL_NAME}): {e}")
+        st.error(f"生成エラー: {e}")
         return None
 
 # ---------------------------------------------------------
-# 3. UI
+# 3. UI (Simple & Clean)
 # ---------------------------------------------------------
-st.title("📝 連絡帳メーカー (現場用)")
+st.title("連絡帳メーカー")
 
-child_id = st.text_input("児童の名前またはID", value="いっくん")
+# 児童ID入力（シンプルに）
+child_id = st.text_input("児童名 / ID", value="いっくん")
 
 if "memos_preview" not in st.session_state:
     st.session_state.memos_preview = ""
@@ -163,76 +133,63 @@ if "memos_preview" not in st.session_state:
 if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
-tab1, tab2 = st.tabs(["🎙️ メモ入力", "📑 連絡帳作成"])
+# タブの絵文字も削除し、機能名のみに
+tab1, tab2 = st.tabs(["記録入力", "連絡帳作成"])
 
 with tab1:
-    st.info(f"💡 「{child_id}」さんの記録。録音停止ボタンを押すと、自動で文字になります。")
+    st.write("録音してメモを追加")
     
-    # 録音ウィジェット
-    audio_val = st.audio_input("クリックして録音開始", key=f"recorder_{st.session_state.audio_key}")
+    # 余計なカラム分割を廃止し、横幅いっぱいに表示させる
+    audio_val = st.audio_input("録音開始", key=f"recorder_{st.session_state.audio_key}")
     
-    # 【変更点】録音データが入ったら、即座にWhisperにかける
+    # 録音完了後のフロー
     if audio_val:
-        # 一度だけ実行するためのフラグ管理などはStreamlitの仕様上複雑になるため、
-        # シンプルに「audio_valがある＝プレビュー表示」とする
-        st.write("👂 聞き取った内容:")
+        st.write("---") # 区切り線
+        st.write("内容確認")
         
-        # 音声認識の実行（結果はキャッシュされないので、リロードのたびに走らないよう注意が必要だが、
-        # 今回のフローではボタン押下でrerunして消えるので許容範囲）
         with st.spinner("文字起こし中..."):
-            # ここで毎回APIを叩くのを防ぐにはsession_state管理が必要だが、
-            # MVPのコード複雑化を防ぐため、最もシンプルな実装にします。
             text = transcribe_audio(audio_val)
         
         if text:
-            # 認識結果を大きく表示
-            st.success(text)
+            # 認識結果をシンプルに表示
+            st.info(text)
             
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                # 登録ボタン
-                if st.button("✅ これで登録", type="primary", use_container_width=True):
-                    save_memo(child_id, text)
-                    st.toast(f"保存しました！", icon="🎉")
-                    # リセット
-                    st.session_state.audio_key += 1
-                    st.rerun()
+            # 保存・破棄ボタンを大きく表示
+            # use_container_width=True でスマホの横幅いっぱいに広げる
+            if st.button("保存する", type="primary", use_container_width=True):
+                save_memo(child_id, text)
+                st.success("保存しました")
+                # リセット
+                st.session_state.audio_key += 1
+                st.rerun()
             
-            with col_cancel:
-                # やり直しボタン
-                if st.button("🗑️ 破棄 (やり直し)", use_container_width=True):
-                    # 保存せずにリセット
-                    st.session_state.audio_key += 1
-                    st.rerun()
+            if st.button("やり直す", use_container_width=True):
+                # 保存せずにリセット
+                st.session_state.audio_key += 1
+                st.rerun()
 
-    st.divider()
+    st.write("---")
+    st.write("今日の記録")
     
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.caption(f"📝 {child_id}さんの今日の記録一覧")
-    with col2:
-        if st.button("🔄 更新"):
-            st.session_state.memos_preview = fetch_todays_memos(child_id)
+    # プレビュー更新ボタン
+    if st.button("記録一覧を更新", use_container_width=True):
+        st.session_state.memos_preview = fetch_todays_memos(child_id)
             
     if st.session_state.memos_preview:
-        st.text_area("記録済み", st.session_state.memos_preview, height=200, disabled=True)
-    else:
-        st.write("（まだ記録はありません）")
+        st.text_area("履歴", st.session_state.memos_preview, height=200, disabled=True)
 
 with tab2:
-    st.write(f"蓄積されたメモから、{child_id}さんの連絡帳を作成します。")
+    st.write("連絡帳の生成")
     
-    if st.button("🚀 連絡帳を作成する", type="primary"):
+    if st.button("生成実行", type="primary", use_container_width=True):
         memos = fetch_todays_memos(child_id)
         
         if not memos:
-            st.error(f"本日の{child_id}さんのメモが見つかりません。")
+            st.error("本日の記録がありません。")
         else:
-            st.info(f"以下のメモを使用します:\n{memos}")
-            with st.spinner("Claudeが執筆中..."):
+            with st.spinner("執筆中..."):
                 report = generate_final_report(child_id, memos)
             
             if report:
-                st.success("作成完了！")
+                st.markdown("### 作成結果")
                 st.markdown(report)
-                st.caption("※データは自動保存されました")
