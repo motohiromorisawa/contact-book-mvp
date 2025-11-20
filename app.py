@@ -9,7 +9,7 @@ import pytz
 # ---------------------------------------------------------
 # 1. 設定
 # ---------------------------------------------------------
-st.set_page_config(page_title="連絡帳メーカー (蓄積型)", layout="wide")
+st.set_page_config(page_title="放デイ：連絡帳メーカー", layout="wide")
 
 # JSTタイムゾーン設定
 JST = pytz.timezone('Asia/Tokyo')
