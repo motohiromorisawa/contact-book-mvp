@@ -103,17 +103,25 @@ def fetch_latest_draft(room_id):
 # ---------------------------------------------------------
 # 3. UI
 # ---------------------------------------------------------
-st.title("📝 親の実践サポート：連絡帳メーカー (v0.5)")
+st.title("📝 親の実践サポート：連絡帳メーカー")
 
 room_id = st.text_input("合言葉 (Room ID)", value="room1")
 
 tab1, tab2 = st.tabs(["📱 スマホ入力", "💻 PC確認・編集"])
 
 with tab1:
-    st.info("💡 ノイズキャンセリングAI (Whisper) が作動します。雑音があっても普通に話してください。")
-    audio_file = st.file_uploader("録音ファイルをアップロード", type=["m4a", "mp3", "wav"])
+    st.info("💡 下のマイクボタンを押して話しかけるか、録音ファイルをアップロードしてください。")
+    
+    # 音声入力手段を2つ用意（マイク入力 OR ファイルアップロード）
+    audio_input = st.audio_input("マイクボタンを押して録音開始")
+    audio_upload = st.file_uploader("または録音ファイルをアップロード", type=["m4a", "mp3", "wav"])
+    
+    # どちらかの入力があれば処理対象とする
+    audio_file = audio_input if audio_input else audio_upload
     
     if audio_file is not None:
+        # ボタンを押さなくても、録音完了したら即座に処理開始するフローに変更も可能ですが、
+        # 誤動作防止のためボタン制を維持します。
         if st.button("魔法をかける (AI処理開始)"):
             with st.spinner("音声を文字に変換中..."):
                 text = transcribe_audio(audio_file)
