@@ -49,9 +49,7 @@ def generate_draft(input_text):
     """
     Claude 4.5 Sonnet を使用してドラフト生成
     """
-    # 2025年11月時点の最新モデルIDを指定 (実際のIDに書き換えてください)
-    # 例: claude-4-5-sonnet-20250929, claude-4-5-sonnet-latest 等
-    MODEL_NAME = "claude-4-5-sonnet-20250929" 
+    MODEL_NAME = "claude-sonnet-4-5-20250929" 
 
     system_prompt = """
     あなたは放課後等デイサービスの熟練職員です。
