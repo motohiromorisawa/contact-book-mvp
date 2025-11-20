@@ -7,30 +7,39 @@ import datetime
 import pytz
 
 # ---------------------------------------------------------
-# 1. 設定 & デザイン (Simple & Clean)
+# 1. 設定: 児童リスト (ここを自由に編集してください)
+# ---------------------------------------------------------
+CHILD_LIST = [
+    "いっくん",
+    "Aちゃん",
+    "Bくん",
+    "Cちゃん",
+    "Dくん"
+]
+
+# ---------------------------------------------------------
+# 2. アプリ設定 & デザイン
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー", layout="wide")
 
-# CSS: シンプルで見やすいスタイル
 st.markdown("""
 <style>
-    /* タブボタンのサイズ調整 */
+    /* タブボタン */
     button[data-baseweb="tab"] {
         font-size: 18px !important;
         padding: 12px 0px !important;
         font-weight: bold !important;
         flex: 1;
     }
-    
-    /* コピー用テキストエリアのフォント調整 */
+    /* コピー用エリアのフォントを普通のゴシック体に */
     code {
-        font-family: "Helvetica Neue", Arial, sans-serif !important;
+        font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif !important;
         font-size: 16px !important;
+        line-height: 1.6 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# JSTタイムゾーン設定
 JST = pytz.timezone('Asia/Tokyo')
 
 # APIキー設定
@@ -50,10 +59,9 @@ def get_gsp_service():
     return build('sheets', 'v4', credentials=creds)
 
 # ---------------------------------------------------------
-# 2. データ操作機能
+# 3. データ操作機能
 # ---------------------------------------------------------
 def transcribe_audio(audio_file):
-    """Whisper APIで音声認識"""
     try:
         transcript = openai.audio.transcriptions.create(
             model="whisper-1", 
@@ -65,19 +73,17 @@ def transcribe_audio(audio_file):
         st.error(f"音声認識エラー: {e}")
         return None
 
-def save_data(child_id, text, data_type="MEMO"):
-    """データをシートに保存"""
+def save_data(child_name, text, data_type="MEMO"):
     service = get_gsp_service()
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    values = [[now, child_id, text, data_type]]
+    values = [[now, child_name, text, data_type]]
     body = {'values': values}
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D",
         valueInputOption="USER_ENTERED", body=body
     ).execute()
 
-def fetch_todays_data(child_id):
-    """今日のデータを取得"""
+def fetch_todays_data(child_name):
     service = get_gsp_service()
     sheet = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D"
@@ -90,7 +96,8 @@ def fetch_todays_data(child_id):
     
     for row in rows:
         if len(row) >= 4:
-            if row[1] == child_id and row[0].startswith(today_str):
+            # 名前と日付の一致確認
+            if row[1] == child_name and row[0].startswith(today_str):
                 if row[3] == "MEMO":
                     time_part = row[0][11:16]
                     memos.append(f"{time_part} {row[2]}")
@@ -99,50 +106,47 @@ def fetch_todays_data(child_id):
     
     return "\n".join(memos), latest_report
 
-def generate_final_report(child_id, combined_text):
-    """連絡帳と業務記録を生成"""
-    # 指定されたモデルID (ユーザー指定)
+def generate_final_report(child_name, combined_text):
+    # 指定のモデルID
     MODEL_NAME = "claude-sonnet-4-5-20250929"
 
     system_prompt = f"""
-    あなたは放課後等デイサービスの、子供の成長に感動し、それを親と分かち合いたいと願う愛情深い職員です。
-    児童（ID: {child_id}）の今日の記録から、「保護者用連絡帳」と「職員用申し送り」を作成してください。
+    あなたは放課後等デイサービスの職員です。
+    児童（名前: {child_name}）の記録から、「保護者用連絡帳」と「職員用申し送り」を作成してください。
 
-    # 出力ルール（厳守）
-    1. **絵文字禁止**: 文字化け防止のため、絵文字は一切使わず、言葉の選び方で温かさを表現すること。
-    2. **分割出力**: 保護者用と職員用の間に `<<<SEPARATOR>>>` を入れて区切ること。
+    # 重要指示
+    1. **名前の統一**: 音声入力で「{child_name}」が誤変換されていても（例: いっこ、一君）、出力では必ず「{child_name}」と正しく表記すること。
+    2. **マークダウン禁止**: 太字(**)や見出し記号(##)は使わない。普通のテキスト形式にする。
+    3. **自然な文体**: 
+       - 「感動しました！」「素晴らしいです！」といった過剰な感嘆符や演技がかった表現は避ける。
+       - 穏やかで、落ち着いた、普通の日本の保育・療育現場の話し言葉（丁寧語）を使う。
+       - 文末は「〜していました。」「〜な様子でした。」など自然に。
+    4. **分割出力**: 保護者用と職員用の間に `<<<SEPARATOR>>>` を入れて区切る。
 
     # 1. 保護者用連絡帳
-    - **文体**: 親しみやすく温かい丁寧語。「報告」ではなく「お便り」のように。
-    - **構成**:
-        【今日の一コマ】
-        → その日一番輝いていた瞬間や、職員が心を動かされた場面を、主観（驚き、喜び、感心）を交えて情景が浮かぶように描く。
-        
-        【活動の記録】
-        → 何をしたかをシンプルに箇条書き。
-        
-        【おうちでのヒント】（※特筆すべきことがあれば）
-        → 今日の様子から、家庭でも活かせそうな関わり方のヒントがあれば短く添える。なければ省略。
+    構成（見出しは【 】などの記号のみで表現）:
+    【今日の様子】
+    エピソードを自然な文章でつづる。無理に褒めちぎるのではなく、子供の行動の背景（楽しんでいたこと、頑張っていたこと）を肯定的に描写する。
+    
+    【活動内容】
+    ・箇条書き（記号は・を使用）
 
-    - **視点のリフレーミング**:
-        「こだわり」→「探究心・集中力」
-        「切り替えが遅い」→「没頭する力」
-        「多動」→「エネルギー・好奇心」
-        として肯定的に翻訳する。
+    【ご連絡】
+    ※家庭へ伝えるべき事項があれば。なければ省略。
 
     # 2. 職員用申し送り
-    - **文体**: 簡潔な常体（だ・である）。事実ベースで事務的に。
-    - **構成**:
-        【特記事項】（トラブル、体調、排泄など）
-        【ISP関連】（支援計画に基づく評価）
-        【次回への共有】
+    構成:
+    【特記事項・事実】
+    事実ベースの記録（トラブル、体調など）
+    【申し送り】
+    次回への引き継ぎ
     """
     
     try:
         message = anthropic_client.messages.create(
             model=MODEL_NAME,
             max_tokens=2000,
-            temperature=0.5, # 少し創造性を上げて、感情豊かにする
+            temperature=0.3, # 温度を下げて、より落ち着いた出力にする
             system=system_prompt,
             messages=[
                 {"role": "user", "content": f"以下のメモをもとに作成してください：\n\n{combined_text}"}
@@ -150,7 +154,7 @@ def generate_final_report(child_id, combined_text):
         )
         
         full_text = message.content[0].text
-        save_data(child_id, full_text, "REPORT")
+        save_data(child_name, full_text, "REPORT")
         return full_text
         
     except Exception as e:
@@ -162,7 +166,8 @@ def generate_final_report(child_id, combined_text):
 # ---------------------------------------------------------
 st.title("連絡帳メーカー")
 
-child_id = st.text_input("児童名 / ID", value="いっくん")
+# 【変更点】プルダウンで児童を選択
+child_name = st.selectbox("児童名を選択", CHILD_LIST)
 
 if "memos_preview" not in st.session_state:
     st.session_state.memos_preview = ""
@@ -186,8 +191,8 @@ with tab1:
             
             with col_save:
                 if st.button("保存", type="primary", use_container_width=True):
-                    save_data(child_id, text, "MEMO")
-                    st.toast("保存しました", icon="✅")
+                    save_data(child_name, text, "MEMO")
+                    st.toast(f"{child_name}さんの記録を保存しました", icon="✅")
                     st.session_state.audio_key += 1
                     st.rerun()
             
@@ -197,17 +202,17 @@ with tab1:
                     st.rerun()
 
     st.write("---")
-    if st.button("記録一覧を更新", use_container_width=True):
-        memos, _ = fetch_todays_data(child_id)
+    # 児童が変わった時にプレビューが残らないよう、ボタン押下時のみ取得
+    if st.button(f"{child_name}さんの記録を表示", use_container_width=True):
+        memos, _ = fetch_todays_data(child_name)
         st.session_state.memos_preview = memos
             
     if st.session_state.memos_preview:
-        st.caption("今日の記録済みメモ")
-        st.text_area("history", st.session_state.memos_preview, height=150, disabled=True, label_visibility="collapsed")
+        st.text_area("今日の記録", st.session_state.memos_preview, height=150, disabled=True)
 
 # --- TAB 2: 出力・コピー ---
 with tab2:
-    memos, existing_report = fetch_todays_data(child_id)
+    memos, existing_report = fetch_todays_data(child_name)
     
     def display_split_report(full_text):
         parts = full_text.split("<<<SEPARATOR>>>")
@@ -215,6 +220,7 @@ with tab2:
         staff_part = parts[1].strip() if len(parts) > 1 else "（職員用記録なし）"
 
         st.markdown("### 1. 保護者用")
+        # language=None にすることで、シンタックスハイライト（色付け）を無効化し、普通の文章として表示
         st.code(parent_part, language=None)
 
         st.divider()
@@ -224,7 +230,7 @@ with tab2:
 
     # A. 既にレポートがある場合
     if existing_report:
-        st.success("作成済み")
+        st.success(f"{child_name}さんの連絡帳：作成済み")
         display_split_report(existing_report)
         
         st.divider()
@@ -233,19 +239,19 @@ with tab2:
                 st.error("メモがありません")
             else:
                 with st.spinner("再生成中..."):
-                    report = generate_final_report(child_id, memos)
+                    report = generate_final_report(child_name, memos)
                 if report:
                     st.rerun()
 
     # B. まだない場合
     else:
-        st.info("本日の連絡帳は未作成です")
+        st.info(f"{child_name}さんの本日の連絡帳は未作成です")
         if st.button("連絡帳を作成する", type="primary", use_container_width=True):
             if not memos:
                 st.error("記録メモがありません")
             else:
-                with st.spinner("心を込めて作成中..."):
-                    report = generate_final_report(child_id, memos)
+                with st.spinner("自然な文章で作成中..."):
+                    report = generate_final_report(child_name, memos)
                 
                 if report:
                     st.rerun()
