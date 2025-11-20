@@ -199,4 +199,45 @@ with tab2:
     memos, existing_report = fetch_todays_data(child_id)
     
     # レポート表示用関数
-    def display_
+    def display_split_report(full_text):
+        # セパレーターで分割
+        parts = full_text.split("<<<SEPARATOR>>>")
+        parent_part = parts[0].strip()
+        staff_part = parts[1].strip() if len(parts) > 1 else "（職員用記録なし）"
+
+        st.markdown("### 1. 保護者用")
+        # st.codeを使うと、右上にコピーボタンが自動でつきます
+        st.code(parent_part, language=None)
+
+        st.divider()
+
+        st.markdown("### 2. 職員共有用")
+        st.code(staff_part, language=None)
+
+    # A. 既にレポートがある場合
+    if existing_report:
+        st.success("作成済み")
+        display_split_report(existing_report)
+        
+        st.divider()
+        if st.button("内容を更新して再生成", type="secondary", use_container_width=True):
+            if not memos:
+                st.error("メモがありません")
+            else:
+                with st.spinner("再生成中..."):
+                    report = generate_final_report(child_id, memos)
+                if report:
+                    st.rerun()
+
+    # B. まだない場合
+    else:
+        st.info("本日の連絡帳は未作成です")
+        if st.button("連絡帳を作成する", type="primary", use_container_width=True):
+            if not memos:
+                st.error("記録メモがありません")
+            else:
+                with st.spinner("作成中..."):
+                    report = generate_final_report(child_id, memos)
+                
+                if report:
+                    st.rerun()
