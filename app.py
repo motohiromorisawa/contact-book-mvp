@@ -7,25 +7,24 @@ import datetime
 import pytz
 
 # ---------------------------------------------------------
-# 1. 設定 & デザイン
+# 1. 設定 & デザイン (Simple & Clean)
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー", layout="wide")
 
-# CSS: タブを大きく、見やすく
+# CSS: 青い線などの装飾を排除し、サイズだけ調整して押しやすく
 st.markdown("""
 <style>
+    /* タブボタンのサイズ調整のみ（色はStreamlit標準に任せる） */
     button[data-baseweb="tab"] {
-        font-size: 20px !important;
-        padding: 15px 0px !important;
+        font-size: 18px !important;
+        padding: 12px 0px !important;
         font-weight: bold !important;
         flex: 1;
     }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        border-bottom: 4px solid #2196F3 !important;
-    }
-    /* コピー用テキストエリア（st.code）のフォント調整 */
+    
+    /* コピー用テキストエリアのフォント調整 */
     code {
-        font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif !important;
+        font-family: "Helvetica Neue", Arial, sans-serif !important;
         font-size: 16px !important;
     }
 </style>
@@ -102,7 +101,8 @@ def fetch_todays_data(child_id):
 
 def generate_final_report(child_id, combined_text):
     """連絡帳と業務記録を生成"""
-    MODEL_NAME = "claude-3-5-sonnet-20241022" # 安定版を使用
+    # 指定されたモデルID
+    MODEL_NAME = "claude-sonnet-4-5-20250929"
 
     system_prompt = f"""
     あなたは放課後等デイサービスの職員です。
@@ -158,7 +158,7 @@ if "memos_preview" not in st.session_state:
 if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
-tab1, tab2 = st.tabs(["📝 記録入力", "📋 出力・コピー"])
+tab1, tab2 = st.tabs(["メモ入力", "出力・コピー"])
 
 # --- TAB 1: 記録入力 ---
 with tab1:
@@ -199,48 +199,4 @@ with tab2:
     memos, existing_report = fetch_todays_data(child_id)
     
     # レポート表示用関数
-    def display_split_report(full_text):
-        # セパレーターで分割
-        parts = full_text.split("<<<SEPARATOR>>>")
-        parent_part = parts[0].strip()
-        staff_part = parts[1].strip() if len(parts) > 1 else "（職員用記録なし）"
-
-        st.markdown("### 1. 保護者用 (コピペ用)")
-        st.caption("右上のコピーボタンでコピーできます")
-        # st.codeを使うと、右上にコピーボタンが自動でつきます
-        st.code(parent_part, language=None)
-
-        st.divider()
-
-        st.markdown("### 2. 職員共有用 (コピペ用)")
-        st.caption("右上のコピーボタンでコピーできます")
-        st.code(staff_part, language=None)
-
-    # A. 既にレポートがある場合
-    if existing_report:
-        st.success("✅ 作成済み")
-        display_split_report(existing_report)
-        
-        st.divider()
-        if st.button("🔄 内容を更新して再生成", type="secondary", use_container_width=True):
-            if not memos:
-                st.error("メモがありません")
-            else:
-                with st.spinner("再生成中..."):
-                    report = generate_final_report(child_id, memos)
-                if report:
-                    st.rerun()
-
-    # B. まだない場合
-    else:
-        st.info("本日の連絡帳は未作成です")
-        if st.button("✨ 連絡帳を作成する", type="primary", use_container_width=True):
-            if not memos:
-                st.error("記録メモがありません")
-            else:
-                with st.spinner("保護者用と職員用を書き分けています..."):
-                    report = generate_final_report(child_id, memos)
-                
-                if report:
-                    st.balloons()
-                    st.rerun()
+    def display_
