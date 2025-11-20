@@ -83,7 +83,7 @@ def fetch_todays_memos(child_id):
 def generate_final_report(child_id, combined_text):
     """集まったメモから最終レポートを生成"""
     # 動作確認済みのモデルID
-    MODEL_NAME = "claude-3-5-sonnet-20241022"
+    MODEL_NAME = "claude-4-5-sonnet-20250929"
 
     system_prompt = f"""
     あなたは放課後等デイサービスの熟練職員です。
