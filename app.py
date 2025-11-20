@@ -11,10 +11,10 @@ import pytz
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー", layout="wide")
 
-# CSS: 青い線などの装飾を排除し、サイズだけ調整して押しやすく
+# CSS: シンプルで見やすいスタイル
 st.markdown("""
 <style>
-    /* タブボタンのサイズ調整のみ（色はStreamlit標準に任せる） */
+    /* タブボタンのサイズ調整 */
     button[data-baseweb="tab"] {
         font-size: 18px !important;
         padding: 12px 0px !important;
@@ -101,37 +101,48 @@ def fetch_todays_data(child_id):
 
 def generate_final_report(child_id, combined_text):
     """連絡帳と業務記録を生成"""
-    # 指定されたモデルID
+    # 指定されたモデルID (ユーザー指定)
     MODEL_NAME = "claude-sonnet-4-5-20250929"
 
     system_prompt = f"""
-    あなたは放課後等デイサービスの職員です。
-    児童（ID: {child_id}）の記録から、「保護者用連絡帳」と「職員用申し送り」を作成してください。
+    あなたは放課後等デイサービスの、子供の成長に感動し、それを親と分かち合いたいと願う愛情深い職員です。
+    児童（ID: {child_id}）の今日の記録から、「保護者用連絡帳」と「職員用申し送り」を作成してください。
 
     # 出力ルール（厳守）
-    1. **絵文字禁止**: 文字化けを防ぐため、絵文字は一切使用しないこと。記号（■や・など）は使用可。
-    2. **分割出力**: 保護者用と職員用の間に `<<<SEPARATOR>>>` という文字列を入れて区切ること。
+    1. **絵文字禁止**: 文字化け防止のため、絵文字は一切使わず、言葉の選び方で温かさを表現すること。
+    2. **分割出力**: 保護者用と職員用の間に `<<<SEPARATOR>>>` を入れて区切ること。
 
     # 1. 保護者用連絡帳
-    - 構成:
-        【今日の一コマ】（情緒的・肯定的なエピソード）
-        【活動内容】（箇条書き）
-        【家庭への連絡】（必要な場合のみ）
-    - 文体: 丁寧語。ネガティブな事実はリフレーミングし、肯定的に伝える。
+    - **文体**: 親しみやすく温かい丁寧語。「報告」ではなく「お便り」のように。
+    - **構成**:
+        【今日の一コマ】
+        → その日一番輝いていた瞬間や、職員が心を動かされた場面を、主観（驚き、喜び、感心）を交えて情景が浮かぶように描く。
+        
+        【活動の記録】
+        → 何をしたかをシンプルに箇条書き。
+        
+        【おうちでのヒント】（※特筆すべきことがあれば）
+        → 今日の様子から、家庭でも活かせそうな関わり方のヒントがあれば短く添える。なければ省略。
+
+    - **視点のリフレーミング**:
+        「こだわり」→「探究心・集中力」
+        「切り替えが遅い」→「没頭する力」
+        「多動」→「エネルギー・好奇心」
+        として肯定的に翻訳する。
 
     # 2. 職員用申し送り
-    - 構成:
-        【特記事項】（トラブル、体調変化、排泄など事実ベース）
-        【ISP関連】（支援計画に基づく行動評価）
-        【申し送り】（明日以降のスタッフへの共有事項）
-    - 文体: 簡潔な常体（だ・である）。事実を正確に。
+    - **文体**: 簡潔な常体（だ・である）。事実ベースで事務的に。
+    - **構成**:
+        【特記事項】（トラブル、体調、排泄など）
+        【ISP関連】（支援計画に基づく評価）
+        【次回への共有】
     """
     
     try:
         message = anthropic_client.messages.create(
             model=MODEL_NAME,
             max_tokens=2000,
-            temperature=0.3,
+            temperature=0.5, # 少し創造性を上げて、感情豊かにする
             system=system_prompt,
             messages=[
                 {"role": "user", "content": f"以下のメモをもとに作成してください：\n\n{combined_text}"}
@@ -198,15 +209,12 @@ with tab1:
 with tab2:
     memos, existing_report = fetch_todays_data(child_id)
     
-    # レポート表示用関数
     def display_split_report(full_text):
-        # セパレーターで分割
         parts = full_text.split("<<<SEPARATOR>>>")
         parent_part = parts[0].strip()
         staff_part = parts[1].strip() if len(parts) > 1 else "（職員用記録なし）"
 
         st.markdown("### 1. 保護者用")
-        # st.codeを使うと、右上にコピーボタンが自動でつきます
         st.code(parent_part, language=None)
 
         st.divider()
@@ -236,7 +244,7 @@ with tab2:
             if not memos:
                 st.error("記録メモがありません")
             else:
-                with st.spinner("作成中..."):
+                with st.spinner("心を込めて作成中..."):
                     report = generate_final_report(child_id, memos)
                 
                 if report:
