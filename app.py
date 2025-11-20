@@ -11,20 +11,33 @@ import pytz
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー (現場用)", layout="wide")
 
-# CSSでマイクボタンを巨大化させるハック
+# CSSハック：マイクボタンを強制的に巨大化・スマホ最適化
 st.markdown("""
 <style>
-    /* 音声入力ウィジェットのボタンを巨大化 */
+    /* マイクボタンのコンテナ */
+    [data-testid="stAudioInput"] {
+        width: 100% !important;
+    }
+    
+    /* 録音ボタンそのものを巨大化 */
     [data-testid="stAudioInput"] button {
         width: 100% !important;
-        height: 100px !important;
-        font-size: 2rem !important;
-        background-color: #FFEBEE !important; /* 薄い赤色で目立たせる */
-        border-radius: 20px !important;
+        height: 80px !important;
+        font-size: 1.5rem !important;
+        background-color: #f0f2f6 !important;
+        border: 2px solid #4CAF50 !important; /* 緑枠で目立たせる */
+        border-radius: 12px !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
     }
-    /* 録音完了後の波形表示エリアも見やすく */
-    [data-testid="stAudioInput"] {
-        margin-bottom: 20px !important;
+    
+    /* 録音中の赤いアイコンを目立たせる */
+    [data-testid="stAudioInput"] button span {
+        font-weight: bold !important;
+    }
+    
+    /* 処理中のスピナーを中央に */
+    .stSpinner {
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -68,7 +81,6 @@ def save_memo(child_id, memo_text):
     """断片的なメモをシートに保存"""
     service = get_gsp_service()
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    # 保存形式: [日時, 児童ID, メモ内容, "MEMO"]
     values = [[now, child_id, memo_text, "MEMO"]]
     body = {'values': values}
     service.spreadsheets().values().append(
@@ -148,38 +160,56 @@ child_id = st.text_input("児童の名前またはID", value="いっくん")
 if "memos_preview" not in st.session_state:
     st.session_state.memos_preview = ""
 
-# マイクウィジェットを強制リセットするためのカウンター
 if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
 tab1, tab2 = st.tabs(["🎙️ メモ入力", "📑 連絡帳作成"])
 
 with tab1:
-    st.info(f"💡 「{child_id}」さんの記録を追加します。下の大きなボタンを押して録音してください。")
+    st.info(f"💡 「{child_id}」さんの記録。録音停止ボタンを押すと、自動で文字になります。")
     
-    # keyに数値を渡すことで、数値を変更した時にウィジェットを強制リセットできる
-    audio_val = st.audio_input("録音", key=f"recorder_{st.session_state.audio_key}")
+    # 録音ウィジェット
+    audio_val = st.audio_input("クリックして録音開始", key=f"recorder_{st.session_state.audio_key}")
     
-    # 録音が完了し、データが存在する時だけ保存ボタンを表示する
+    # 【変更点】録音データが入ったら、即座にWhisperにかける
     if audio_val:
-        st.success("録音完了！保存ボタンを押してください。")
-        if st.button("このメモを保存する (Save)", type="primary", use_container_width=True):
-            with st.spinner("文字に変換中..."):
-                text = transcribe_audio(audio_val)
+        # 一度だけ実行するためのフラグ管理などはStreamlitの仕様上複雑になるため、
+        # シンプルに「audio_valがある＝プレビュー表示」とする
+        st.write("👂 聞き取った内容:")
+        
+        # 音声認識の実行（結果はキャッシュされないので、リロードのたびに走らないよう注意が必要だが、
+        # 今回のフローではボタン押下でrerunして消えるので許容範囲）
+        with st.spinner("文字起こし中..."):
+            # ここで毎回APIを叩くのを防ぐにはsession_state管理が必要だが、
+            # MVPのコード複雑化を防ぐため、最もシンプルな実装にします。
+            text = transcribe_audio(audio_val)
+        
+        if text:
+            # 認識結果を大きく表示
+            st.success(text)
             
-            if text:
-                save_memo(child_id, text)
-                st.toast(f"保存しました: {text}", icon="✅")
-                
-                # 保存成功後、キーを更新してマイク入力をリセット（空にする）
-                st.session_state.audio_key += 1
-                st.rerun()
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                # 登録ボタン
+                if st.button("✅ これで登録", type="primary", use_container_width=True):
+                    save_memo(child_id, text)
+                    st.toast(f"保存しました！", icon="🎉")
+                    # リセット
+                    st.session_state.audio_key += 1
+                    st.rerun()
+            
+            with col_cancel:
+                # やり直しボタン
+                if st.button("🗑️ 破棄 (やり直し)", use_container_width=True):
+                    # 保存せずにリセット
+                    st.session_state.audio_key += 1
+                    st.rerun()
 
     st.divider()
     
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.caption(f"📝 {child_id}さんの今日のメモ")
+        st.caption(f"📝 {child_id}さんの今日の記録一覧")
     with col2:
         if st.button("🔄 更新"):
             st.session_state.memos_preview = fetch_todays_memos(child_id)
