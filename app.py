@@ -7,31 +7,18 @@ import datetime
 import pytz
 
 # ---------------------------------------------------------
-# 1. 設定: 児童リスト (ここを自由に編集してください)
-# ---------------------------------------------------------
-CHILD_LIST = [
-    "いっくん",
-    "Aちゃん",
-    "Bくん",
-    "Cちゃん",
-    "Dくん"
-]
-
-# ---------------------------------------------------------
-# 2. アプリ設定 & デザイン
+# 1. 設定 & デザイン
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー", layout="wide")
 
 st.markdown("""
 <style>
-    /* タブボタン */
     button[data-baseweb="tab"] {
         font-size: 18px !important;
         padding: 12px 0px !important;
         font-weight: bold !important;
         flex: 1;
     }
-    /* コピー用エリアのフォントを普通のゴシック体に */
     code {
         font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif !important;
         font-size: 16px !important;
@@ -59,8 +46,28 @@ def get_gsp_service():
     return build('sheets', 'v4', credentials=creds)
 
 # ---------------------------------------------------------
-# 3. データ操作機能
+# 2. データ操作機能
 # ---------------------------------------------------------
+def get_child_list():
+    """スプレッドシートの'member'シートから児童名を取得"""
+    try:
+        service = get_gsp_service()
+        # 【変更点】シート名を 'member' に変更しました（記号なし）
+        sheet = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range="member!A:A"
+        ).execute()
+        values = sheet.get('values', [])
+        
+        child_list = [row[0] for row in values if row]
+        
+        if not child_list:
+            return ["（シート'member'に名前を追加してください）"]
+        return child_list
+        
+    except Exception as e:
+        st.error(f"児童リスト読み込みエラー: {e}")
+        return ["読込エラー"]
+
 def transcribe_audio(audio_file):
     try:
         transcript = openai.audio.transcriptions.create(
@@ -78,6 +85,7 @@ def save_data(child_name, text, data_type="MEMO"):
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     values = [[now, child_name, text, data_type]]
     body = {'values': values}
+    # 記録は 'Sheet1' に保存
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D",
         valueInputOption="USER_ENTERED", body=body
@@ -96,7 +104,6 @@ def fetch_todays_data(child_name):
     
     for row in rows:
         if len(row) >= 4:
-            # 名前と日付の一致確認
             if row[1] == child_name and row[0].startswith(today_str):
                 if row[3] == "MEMO":
                     time_part = row[0][11:16]
@@ -107,7 +114,6 @@ def fetch_todays_data(child_name):
     return "\n".join(memos), latest_report
 
 def generate_final_report(child_name, combined_text):
-    # 指定のモデルID
     MODEL_NAME = "claude-sonnet-4-5-20250929"
 
     system_prompt = f"""
@@ -115,18 +121,18 @@ def generate_final_report(child_name, combined_text):
     児童（名前: {child_name}）の記録から、「保護者用連絡帳」と「職員用申し送り」を作成してください。
 
     # 重要指示
-    1. **名前の統一**: 音声入力で「{child_name}」が誤変換されていても（例: いっこ、一君）、出力では必ず「{child_name}」と正しく表記すること。
+    1. **名前の統一**: 音声入力で「{child_name}」が誤変換されていても、出力では必ず「{child_name}」と正しく表記すること。
     2. **マークダウン禁止**: 太字(**)や見出し記号(##)は使わない。普通のテキスト形式にする。
     3. **自然な文体**: 
-       - 「感動しました！」「素晴らしいです！」といった過剰な感嘆符や演技がかった表現は避ける。
+       - 過剰な感嘆符や演技がかった表現は避ける。
        - 穏やかで、落ち着いた、普通の日本の保育・療育現場の話し言葉（丁寧語）を使う。
        - 文末は「〜していました。」「〜な様子でした。」など自然に。
     4. **分割出力**: 保護者用と職員用の間に `<<<SEPARATOR>>>` を入れて区切る。
 
     # 1. 保護者用連絡帳
-    構成（見出しは【 】などの記号のみで表現）:
+    構成:
     【今日の様子】
-    エピソードを自然な文章でつづる。無理に褒めちぎるのではなく、子供の行動の背景（楽しんでいたこと、頑張っていたこと）を肯定的に描写する。
+    エピソードを自然な文章でつづる。無理に褒めちぎるのではなく、行動の背景（楽しんでいたこと、頑張っていたこと）を肯定的に描写する。
     
     【活動内容】
     ・箇条書き（記号は・を使用）
@@ -137,7 +143,7 @@ def generate_final_report(child_name, combined_text):
     # 2. 職員用申し送り
     構成:
     【特記事項・事実】
-    事実ベースの記録（トラブル、体調など）
+    事実ベースの記録
     【申し送り】
     次回への引き継ぎ
     """
@@ -146,7 +152,7 @@ def generate_final_report(child_name, combined_text):
         message = anthropic_client.messages.create(
             model=MODEL_NAME,
             max_tokens=2000,
-            temperature=0.3, # 温度を下げて、より落ち着いた出力にする
+            temperature=0.3,
             system=system_prompt,
             messages=[
                 {"role": "user", "content": f"以下のメモをもとに作成してください：\n\n{combined_text}"}
@@ -166,8 +172,9 @@ def generate_final_report(child_name, combined_text):
 # ---------------------------------------------------------
 st.title("連絡帳メーカー")
 
-# 【変更点】プルダウンで児童を選択
-child_name = st.selectbox("児童名を選択", CHILD_LIST)
+# スプレッドシートからリスト取得
+child_options = get_child_list()
+child_name = st.selectbox("児童名を選択", child_options)
 
 if "memos_preview" not in st.session_state:
     st.session_state.memos_preview = ""
@@ -202,7 +209,6 @@ with tab1:
                     st.rerun()
 
     st.write("---")
-    # 児童が変わった時にプレビューが残らないよう、ボタン押下時のみ取得
     if st.button(f"{child_name}さんの記録を表示", use_container_width=True):
         memos, _ = fetch_todays_data(child_name)
         st.session_state.memos_preview = memos
@@ -220,7 +226,6 @@ with tab2:
         staff_part = parts[1].strip() if len(parts) > 1 else "（職員用記録なし）"
 
         st.markdown("### 1. 保護者用")
-        # language=None にすることで、シンタックスハイライト（色付け）を無効化し、普通の文章として表示
         st.code(parent_part, language=None)
 
         st.divider()
@@ -228,7 +233,6 @@ with tab2:
         st.markdown("### 2. 職員共有用")
         st.code(staff_part, language=None)
 
-    # A. 既にレポートがある場合
     if existing_report:
         st.success(f"{child_name}さんの連絡帳：作成済み")
         display_split_report(existing_report)
@@ -243,7 +247,6 @@ with tab2:
                 if report:
                     st.rerun()
 
-    # B. まだない場合
     else:
         st.info(f"{child_name}さんの本日の連絡帳は未作成です")
         if st.button("連絡帳を作成する", type="primary", use_container_width=True):
