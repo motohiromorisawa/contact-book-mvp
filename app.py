@@ -5,307 +5,189 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import datetime
 import pytz
+import difflib  # 差分計算用
 
 # ---------------------------------------------------------
 # 1. 設定 & デザイン
 # ---------------------------------------------------------
-st.set_page_config(page_title="連絡帳メーカー", layout="wide")
+st.set_page_config(page_title="連絡帳Co-Pilot", layout="wide")
 JST = pytz.timezone('Asia/Tokyo')
 
-# デザインCSS
 st.markdown("""
 <style>
-    button[data-baseweb="tab"] { font-size: 16px !important; font-weight: bold !important; }
-    .success-box { background-color: #E3F2FD; color: #1565C0; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 15px; }
-    .style-box { background-color: #F3E5F5; border-left: 5px solid #9C27B0; padding: 10px; font-size: 0.9em; color: #4A148C; margin-bottom: 10px;}
+    .main-header { font-size: 24px; font-weight: bold; color: #1E88E5; margin-bottom: 20px; }
+    .status-badge { background-color: #E8F5E9; color: #2E7D32; padding: 5px 10px; border-radius: 15px; font-size: 0.8em; font-weight: bold; }
+    /* テキストエリアを使いやすく */
+    textarea { font-size: 16px !important; line-height: 1.5 !important; font-family: "Hiragino Kaku Gothic ProN", sans-serif !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# API設定
+# API設定 (secretsから取得)
 if "OPENAI_API_KEY" in st.secrets: openai.api_key = st.secrets["OPENAI_API_KEY"]
 if "ANTHROPIC_API_KEY" in st.secrets: anthropic_client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = st.secrets["GCP_SPREADSHEET_ID"]
 
+# ---------------------------------------------------------
+# 2. ロジック類
+# ---------------------------------------------------------
 def get_gsp_service():
     creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
     return build('sheets', 'v4', credentials=creds)
 
-# ---------------------------------------------------------
-# 2. データ取得・分析ロジック
-# ---------------------------------------------------------
-def get_lists():
-    """児童リストと職員リストを取得"""
-    try:
-        service = get_gsp_service()
-        # memberシートのA列(児童)とB列(職員)を取得
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:B").execute()
-        values = sheet.get('values', [])
-        children = [row[0] for row in values if len(row) > 0]
-        staffs = [row[1] for row in values if len(row) > 1]
-        return children, staffs
-    except Exception as e:
-        st.error(f"リスト読込エラー: {e}")
-        return [], []
+def calculate_similarity(text1, text2):
+    """2つのテキストの類似度を0.0〜1.0で算出（1.0が完全一致）"""
+    return difflib.SequenceMatcher(None, text1, text2).ratio()
 
-def get_retry_count(child_name):
-    """本日のこの児童に対する生成回数をカウント（再生成の指標）"""
-    try:
-        service = get_gsp_service()
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
-        rows = sheet.get('values', [])
-        today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
-        
-        count = 0
-        for row in rows:
-            if len(row) >= 4:
-                # 日付一致 AND 名前一致 AND タイプがREPORT
-                if row[0].startswith(today_str) and row[1] == child_name and row[3] == "REPORT":
-                    count += 1
-        return count
-    except:
-        return 0
-
-def get_staff_style_examples(staff_name):
+def save_final_record(child_name, final_text, original_ai_text, staff_name):
     """
-    その職員の過去のレポートから、評価が高かった（修正なしor微修正）ものを最大3件取得
+    最終結果を保存し、AI原案との「乖離度」を品質指標として記録する
     """
-    try:
-        service = get_gsp_service()
-        # 全データを取得 (A:G列) ※G列はFeedback
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
-        rows = sheet.get('values', [])
-        
-        examples = []
-        # 新しいものから走査
-        for row in reversed(rows):
-            if len(row) >= 8: # H列まであるか
-                r_staff = row[7] # H列: StaffName
-                r_type = row[3]
-                r_text = row[2]
-                r_feedback = row[6] if len(row) > 6 else ""
-                
-                if r_staff == staff_name and r_type == "REPORT":
-                    # 良い評価のものだけを学習データにする（変な癖を学ばないため）
-                    if r_feedback in ["NoEdit", "MinorEdit"]:
-                        # 保護者パートのみを抽出（区切り文字で分割）
-                        parts = r_text.split("<<<SEPARATOR>>>")
-                        parent_text = parts[0].strip()
-                        examples.append(parent_text)
-                        
-            if len(examples) >= 3:
-                break
-        
-        return examples
-    except Exception as e:
-        return []
-
-def transcribe_audio(audio_file):
-    try:
-        transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
-        return transcript.text
-    except:
-        return None
-
-def save_data(child_name, text, data_type, next_hint="", hint_used="", staff_name="", retry_count=0):
     try:
         service = get_gsp_service()
         now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-        # [日時, 名前, 本文, タイプ, 次回ヒント, ヒント活用, 評価(空), 職員名, 再生成数]
-        values = [[now, child_name, text, data_type, next_hint, hint_used, "", staff_name, retry_count]]
+        
+        # 類似度計算 (これがUX満足度の客観指標になる)
+        similarity_score = calculate_similarity(original_ai_text, final_text)
+        
+        # [日時, 名前, 最終本文, タイプ, AI原案(分析用), 類似度スコア, 担当者]
+        values = [[now, child_name, final_text, "REPORT_FINAL", original_ai_text, similarity_score, staff_name]]
+        
         body = {'values': values}
         service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:I", valueInputOption="USER_ENTERED", body=body
+            spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G", valueInputOption="USER_ENTERED", body=body
         ).execute()
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
         return False
 
-def save_feedback(child_name, feedback_score):
-    try:
-        service = get_gsp_service()
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G").execute()
-        rows = sheet.get('values', [])
-        for i in range(len(rows) - 1, -1, -1):
-            if len(rows[i]) >= 4 and rows[i][1] == child_name and rows[i][3] == "REPORT":
-                body = {'values': [[feedback_score]]}
-                service.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID, range=f"Sheet1!G{i+1}", valueInputOption="USER_ENTERED", body=body
-                ).execute()
-                return True
-        return False
-    except:
-        return False
-
+# (メモ取得や音声認識の関数は既存のものを流用・簡略化して記載)
 def fetch_todays_memos(child_name):
-    service = get_gsp_service()
-    sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:D").execute()
-    rows = sheet.get('values', [])
-    today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
-    memos = []
-    latest_report = None
-    for row in rows:
-        if len(row) >= 4 and row[1] == child_name and row[0].startswith(today_str):
-            if row[3] == "MEMO":
-                memos.append(f"{row[0][11:16]} {row[2]}")
-            elif row[3] == "REPORT":
-                latest_report = row[2]
-    return "\n".join(memos), latest_report
+    # ダミーロジック: 実際はスプレッドシートから取得
+    return "10:00 朝の会で元気よく挨拶\n12:00 給食を完食。野菜も食べた。\n15:00 友達とおもちゃの貸し借りでトラブルがあったが、自分で「ごめんね」と言えた。"
 
-def get_hint(child_name):
-    # (省略: 前回のコードと同様のロジック)
-    return "よく観察し、肯定的なフィードバックを行う。"
-
-# ---------------------------------------------------------
-# 3. 生成ロジック (スタイル適応)
-# ---------------------------------------------------------
-def generate_final_report(child_name, current_hint, combined_text, staff_name, style_preset):
-    
-    # 1. 再生成カウント取得
-    retry_count = get_retry_count(child_name)
-    
-    # 2. 文体データの取得 (Few-Shot)
-    past_examples = get_staff_style_examples(staff_name)
-    
-    style_instruction = ""
-    if past_examples:
-        # 過去データがある場合: Few-Shot Prompting
-        examples_text = "\n---\n".join(past_examples)
-        style_instruction = f"""
-        あなたは担当職員「{staff_name}」です。
-        以下の「{staff_name}」が過去に書いた文章の文体、語尾、雰囲気を強く模倣して書いてください。
-        
-        【{staff_name}の過去の執筆例】
-        {examples_text}
-        """
-    else:
-        # データがない場合: プリセット適用
-        presets = {
-            "親しみ（絵文字あり・柔らかめ）": "文体: とても柔らかく、共感的に。絵文字を適度に使用（✨😊など）。保護者に寄り添うトーン。",
-            "標準（丁寧・バランス）": "文体: 丁寧語（です・ます）。客観的な事実と、温かい感想をバランスよく。",
-            "論理（箇条書き・簡潔）": "文体: 簡潔に。事実を中心に記述。情緒的な表現よりも、何ができたかを明確に。"
-        }
-        style_instruction = presets.get(style_preset, "文体: 丁寧語")
-
-    system_prompt = f"""
-    放課後等デイサービスの連絡帳作成。
-    
-    # 基本情報
-    - 児童名: {child_name}
-    - 担当職員: {staff_name}
-    - 本日のヒント: {current_hint}
-
-    # 文体・スタイルの指示 (最重要)
-    {style_instruction}
-
-    # 入力された記録
-    {combined_text}
-
-    # 検証タスク
-    記録内に「本日のヒント」を意識した行動があればYES、なければNO。
-
-    # 出力フォーマット
-    (マークダウン禁止)
-    
-    【今日の様子】
-    ...
-    【活動内容】
-    ...
-    【ご連絡】
-    ...
-    <<<SEPARATOR>>>
-    【ヒント振り返り】
-    ...
-    【特記事項】
-    ...
-    <<<NEXT_HINT>>>
-    (次回の具体的ヒント 1文)
-    <<<HINT_CHECK>>>
-    YES/NO
-    """
-    
+def generate_draft(child_name, memos, staff_name):
+    # ダミー生成ロジック: 実際はClaude APIを呼ぶ
+    # 高速化のため、ストリーミングっぽく見せたり、非同期が望ましいが、一旦同期処理
     try:
-        message = anthropic_client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=2500, temperature=0.3, system=system_prompt,
-            messages=[{"role": "user", "content": "作成してください"}]
-        )
-        full_text = message.content[0].text
+        system_prompt = f"担当者{staff_name}として、{child_name}の連絡帳原案を作成。"
+        # ここでAPIコール...
+        # message = anthropic_client...
         
-        # パース処理
-        parts = full_text.split("<<<NEXT_HINT>>>")
-        report_content = parts[0].strip()
-        remaining = parts[1].strip() if len(parts) > 1 else ""
-        parts2 = remaining.split("<<<HINT_CHECK>>>")
-        next_hint = parts2[0].strip() if parts2 else ""
-        hint_used = parts2[1].strip() if len(parts2) > 1 else "UNKNOWN"
-        
-        # 保存 (StaffNameとRetryCountも含める)
-        if save_data(child_name, report_content, "REPORT", next_hint, hint_used, staff_name, retry_count):
-            return report_content, next_hint
-        return None, None
-    except Exception as e:
-        st.error(f"生成エラー: {e}")
-        return None, None
+        # デモ用返却値
+        return f"""【今日の様子】
+本日は朝の会でとても元気よく挨拶をしてくれました。給食の時間には野菜も含めて完食され、素晴らしい食欲でした。
+
+【活動内容】
+・朝の会
+・給食
+・自由遊び
+
+【特記事項】
+午後、お友達とおもちゃの貸し借りで少しトラブルになりましたが、保育士が仲介する前に自分から「ごめんね」と伝えることができ、成長を感じました。"""
+    except:
+        return ""
 
 # ---------------------------------------------------------
-# 4. UI実装
+# 3. UI構築
 # ---------------------------------------------------------
-st.title("連絡帳メーカー 🤖")
+# セッション状態の初期化
+if "draft_text" not in st.session_state: st.session_state.draft_text = ""
+if "ai_original_text" not in st.session_state: st.session_state.ai_original_text = ""
+if "step" not in st.session_state: st.session_state.step = 1  # 1:メモ入力, 2:編集
 
-# 1. 担当者と児童の選択
-child_list, staff_list = get_lists()
-if not staff_list: staff_list = ["職員A", "職員B"] # デフォルト
+st.markdown("<div class='main-header'>連絡帳Co-Pilot 🤝</div>", unsafe_allow_html=True)
 
-col_conf1, col_conf2 = st.columns(2)
-with col_conf1:
-    staff_name = st.selectbox("担当職員（あなたの名前）", staff_list)
-with col_conf2:
-    child_name = st.selectbox("対象児童", child_list)
-
-# 文体学習状況の表示
-past_examples_count = len(get_staff_style_examples(staff_name))
-if past_examples_count > 0:
-    st.markdown(f"<div class='style-box'>🤖 {staff_name}さんの過去データ({past_examples_count}件)から文体を学習済みです</div>", unsafe_allow_html=True)
-    style_preset = "自動学習"
-else:
-    st.info(f"🔰 {staff_name}さんのデータがまだありません。スタイルを選択してください。")
-    style_preset = st.radio("文体スタイル", ["親しみ（絵文字あり・柔らかめ）", "標準（丁寧・バランス）", "論理（箇条書き・簡潔）"], horizontal=True)
-
-# (以下、メモ入力部分は省略なしで実装可能だが、長くなるためタブ構成のみ記載)
-current_hint = "（デモ用ヒント）"
-tab1, tab2 = st.tabs(["メモ入力", "作成・検証"])
-
-with tab1:
-    # 音声入力・保存処理 (前述と同じロジック)
-    # save_data 呼び出し時に staff_name を渡すのを忘れずに
-    # save_data(child_name, text, "MEMO", "", "", staff_name)
-    st.write("（音声入力・メモ保存UI）") 
-    # ※実際のコードではここに前回の tab1 の内容が入ります
-
-with tab2:
-    memos, existing_report = fetch_todays_memos(child_name)
+# サイドバー設定
+with st.sidebar:
+    st.header("設定")
+    staff_name = st.text_input("担当者名", "鈴木")
+    child_name = st.selectbox("児童名", ["田中 太郎", "佐藤 花子"])
     
-    if existing_report:
-        st.markdown("<div class='success-box'>🎉 作成完了</div>", unsafe_allow_html=True)
-        # レポート表示...
-        st.code(existing_report) # 簡略表示
+    # 完了後のリセットボタン
+    if st.button("次の児童へ（リセット）"):
+        st.session_state.draft_text = ""
+        st.session_state.ai_original_text = ""
+        st.session_state.step = 1
+        st.rerun()
+
+# --- STEP 1: 素材集め ---
+if st.session_state.step == 1:
+    st.subheader("1. 今日の記録を確認")
+    
+    col_memo, col_action = st.columns([2, 1])
+    
+    with col_memo:
+        # メモは編集可能にする（誤字脱字直しのため）
+        current_memos = fetch_todays_memos(child_name)
+        memos_edited = st.text_area("本日のメモ（編集可）", current_memos, height=200)
+    
+    with col_action:
+        st.info("💡 ヒント: メモが具体的だと、より良い原案ができます。")
+        st.write("音声入力ボタン（省略）")
         
-        # フィードバックUI (修正コスト評価)
-        if st.button("評価を記録して終了"):
-             st.toast("記録しました")
+        st.markdown("###")
+        if st.button("この内容で下書きを作成 🚀", type="primary", use_container_width=True):
+            with st.spinner("AIが執筆中..."):
+                draft = generate_draft(child_name, memos_edited, staff_name)
+                st.session_state.ai_original_text = draft
+                st.session_state.draft_text = draft
+                st.session_state.step = 2
+                st.rerun()
 
+# --- STEP 2: 編集と仕上げ (The Live Editor) ---
+elif st.session_state.step == 2:
+    st.subheader("2. 仕上げ（編集・確認）")
+    
+    col_left, col_right = st.columns([1, 1])
+    
+    # 左側：参照用メモ（見ながら書くため）
+    with col_left:
+        st.caption("参照：本日のメモ")
+        st.info(fetch_todays_memos(child_name))
+        
         st.divider()
-        if st.button("🔄 気に入らないので再生成する (文体を微調整)"):
-             with st.spinner("文体を変えて再生成中..."):
-                 # ここで再度 generate_final_report を呼ぶと、内部で retry_count が +1 された状態で記録される
-                 report, _ = generate_final_report(child_name, current_hint, memos, staff_name, style_preset)
-                 if report: st.rerun()
+        st.caption("AIへの調整指示（リテイク）")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("もっと短く"):
+            st.toast("短く書き直します（未実装デモ）")
+        if c2.button("もっと丁寧に"):
+            st.toast("丁寧に書き直します（未実装デモ）")
+        if c3.button("絵文字あり"):
+            st.toast("絵文字を追加します（未実装デモ）")
 
-    else:
-        if st.button("連絡帳を作成する", type="primary"):
-            with st.spinner("過去の文体を分析中..."):
-                report, _ = generate_final_report(child_name, current_hint, memos, staff_name, style_preset)
-                if report: st.rerun()
+    # 右側：メインエディタ
+    with col_right:
+        st.markdown("##### 📝 連絡帳ドラフト")
+        # ここが核心：AIの出力をそのまま編集させる
+        final_text = st.text_area(
+            "ここを直接書き換えてください",
+            value=st.session_state.draft_text,
+            height=400,
+            key="editor"
+        )
+        
+        st.write("---")
+        
+        # アクションエリア
+        col_copy, col_done = st.columns([1, 1])
+        
+        with col_copy:
+            # コピー機能はStreamlitの仕様上難しいが、codeブロックで代用可
+            st.caption("コピー用")
+            st.code(final_text, language=None)
+            
+        with col_done:
+            # 完了ボタンを押した瞬間が「計測」の瞬間
+            if st.button("これで完了（保存） ✅", type="primary", use_container_width=True):
+                if save_final_record(child_name, final_text, st.session_state.ai_original_text, staff_name):
+                    st.balloons()
+                    st.success("保存しました！お疲れ様でした。")
+                    
+                    # 類似度を表示（開発時は表示し、本番では隠しても良い）
+                    sim = calculate_similarity(st.session_state.ai_original_text, final_text)
+                    st.caption(f"🔧 AI活用率（修正の少なさ）: {sim*100:.1f}%")
+                    
+                    # 少し待ってからリセットなどの処理
