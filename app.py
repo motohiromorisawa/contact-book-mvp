@@ -5,29 +5,28 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import datetime
 import pytz
-import difflib # 差分計算用
 
 # ---------------------------------------------------------
 # 1. 設定 & デザイン
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー Pro", layout="wide")
+JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
 <style>
-    /* テキストエリアを見やすく */
     .stTextArea textarea {
         font-size: 16px !important;
         line-height: 1.6 !important;
         font-family: "Hiragino Kaku Gothic ProN", sans-serif !important;
     }
-    /* サイドバーの強調 */
-    [data-testid="stSidebar"] {
-        background-color: #f0f2f6;
+    .status-box {
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
-
-JST = pytz.timezone('Asia/Tokyo')
 
 # API設定
 if "OPENAI_API_KEY" in st.secrets: openai.api_key = st.secrets["OPENAI_API_KEY"]
@@ -41,201 +40,242 @@ def get_gsp_service():
     return build('sheets', 'v4', credentials=creds)
 
 # ---------------------------------------------------------
-# 2. データ操作 (設定・ログ)
+# 2. データ操作
 # ---------------------------------------------------------
-
-def get_staff_list():
-    """memberシートから職員名を取得"""
+def get_lists():
+    """児童リストと職員リストを取得"""
     try:
         service = get_gsp_service()
-        # A列:児童, B列:職員, C列:文体サンプル
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!B:C").execute()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:B").execute()
         values = sheet.get('values', [])
-        # 重複排除してリスト化
-        staff_dict = {} # {name: style_text}
-        for row in values:
-            if row:
-                name = row[0]
-                style = row[1] if len(row) > 1 else ""
-                staff_dict[name] = style
-        return staff_dict
+        children = [row[0] for row in values if len(row) > 0]
+        staffs = [row[1] for row in values if len(row) > 1]
+        return children, staffs
     except:
-        return {"職員A": ""}
+        return [], []
 
-def save_staff_style(name, style_text):
-    """職員の文体サンプルを保存 (簡易的にmemberシートのC列を更新するロジック)"""
-    # 注: 実運用では行を検索してUpdateする必要がありますが、ここでは簡易実装とします
-    # 実際には「設定保存」ボタンでDBや別シートに保存する形が望ましい
-    try:
-        service = get_gsp_service()
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!B:B").execute()
-        rows = sheet.get('values', [])
-        
-        target_row = -1
-        for i, row in enumerate(rows):
-            if row and row[0] == name:
-                target_row = i + 1
-                break
-        
-        if target_row != -1:
-            body = {'values': [[style_text]]}
-            service.spreadsheets().values().update(
-                spreadsheetId=SPREADSHEET_ID, range=f"member!C{target_row}",
-                valueInputOption="USER_ENTERED", body=body
-            ).execute()
-            return True
-        else:
-            # 新規追加等の処理が必要だが今回は割愛
-            return False
-    except:
-        return False
-
-def calculate_similarity_score(original, final):
-    """
-    AI生成文(original)と人間修正文(final)の類似度を0.0~1.0で計算
-    1.0 = 修正なし (AI完璧)
-    0.0 = 全書き換え (AI役に立たず)
-    """
-    return difflib.SequenceMatcher(None, original, final).ratio()
-
-def save_report_log(child_name, final_text, staff_name, similarity_score, hint_used):
-    """
-    修正後の確定データを保存
-    similarity_score (修正率) がKPIになる
-    """
+def save_memo(child_name, text, staff_name):
+    """メモ（素材）の保存"""
     try:
         service = get_gsp_service()
         now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-        # [日時, 児童名, 確定本文, TYPE, 次回ヒント(空), ヒント活用, 類似度スコア, 職員名]
-        values = [[now, child_name, final_text, "REPORT_FINAL", "", hint_used, similarity_score, staff_name]]
+        # [日時, 名前, 本文, タイプ, Staff]
+        values = [[now, child_name, text, "MEMO", staff_name]]
         body = {'values': values}
         service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H", valueInputOption="USER_ENTERED", body=body
+            spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:E", valueInputOption="USER_ENTERED", body=body
         ).execute()
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
         return False
 
-# (メモ取得・音声認識などの既存関数はそのまま利用)
-def fetch_todays_memos(child_name):
-    # ... (前回のコードと同じ) ...
-    return "10:00 朝の会に参加。\n14:00 工作でハサミを使った。", None 
-
-# ---------------------------------------------------------
-# 3. AI生成 (ユーザー定義スタイル反映)
-# ---------------------------------------------------------
-def generate_draft(child_name, memos, staff_name, staff_style_example):
-    
-    system_prompt = f"""
-    あなたは放課後等デイサービスの職員「{staff_name}」です。
-    以下の「あなたの過去の文章例」を参考に、**文体や口調を真似て**連絡帳の下書きを作成してください。
-
-    【{staff_name}の文章スタイル例】
-    {staff_style_example}
-
-    【ルール】
-    - 出力は保護者宛の本文のみ。
-    - 時候の挨拶などは例に従う。
-    - マークダウンは使わない。
-    
-    【本日のメモ】
-    {memos}
+def save_final_report(child_name, ai_draft, final_text, next_hint, staff_name):
     """
+    レポート保存（AI生成版と、人間修正版の両方を保存）
+    Sheet1の列構成: A:日時, B:名前, C:FinalText, D:Type, E:Staff, F:NextHint, G:AI_Draft
+    """
+    try:
+        service = get_gsp_service()
+        now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        
+        # G列にAIの初稿(ai_draft)を保存することで、C列(final_text)との差分分析が可能になる
+        values = [[now, child_name, final_text, "REPORT", staff_name, next_hint, ai_draft]]
+        
+        body = {'values': values}
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G", valueInputOption="USER_ENTERED", body=body
+        ).execute()
+        return True
+    except Exception as e:
+        st.error(f"保存エラー: {e}")
+        return False
+
+def fetch_todays_memos(child_name):
+    service = get_gsp_service()
+    sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:E").execute()
+    rows = sheet.get('values', [])
+    today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
     
+    memos = []
+    for row in rows:
+        # 日付一致 AND 名前一致 AND タイプがMEMO
+        if len(row) >= 4 and row[1] == child_name and row[0].startswith(today_str) and row[3] == "MEMO":
+            time_part = row[0][11:16]
+            memos.append(f"・{time_part} {row[2]}")
+            
+    return "\n".join(memos)
+
+def transcribe_audio(audio_file):
+    try:
+        transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
+        return transcript.text
+    except:
+        return None
+
+# ---------------------------------------------------------
+# 3. 生成ロジック
+# ---------------------------------------------------------
+def generate_draft(child_name, memos, staff_name, style_example):
+    
+    # 職員独自のスタイル指定
+    style_prompt = ""
+    if style_example:
+        style_prompt = f"""
+        【重要：文体・トーンの指定】
+        以下の「{staff_name}」の過去の執筆例の文体（語尾、長さ、漢字の開き方など）を忠実に再現してください。
+        
+        --- 執筆例開始 ---
+        {style_example}
+        --- 執筆例終了 ---
+        """
+    else:
+        style_prompt = "文体：です・ます調。保護者に安心感を与える、簡潔で丁寧なプロフェッショナルな文章。"
+
+    system_prompt = f"""
+    あなたは放課後等デイサービスの職員です。
+    提供されたメモから、保護者への「連絡帳」の下書きを作成してください。
+
+    # 前提
+    - 児童名: {child_name}
+    - 担当職員: {staff_name}
+
+    {style_prompt}
+
+    # 構成
+    1. 今日の様子（ポジティブなエピソードを中心に）
+    2. 活動内容（事実ベース）
+    3. ご連絡（あれば）
+    4. 次回への申し送り（職員間用）
+
+    # ルール
+    - 絵文字は使用禁止。
+    - マークダウンは使用禁止（プレーンテキスト）。
+    - 挨拶から始めてください。
+    - 職員間の申し送りは、最後に `<<<INTERNAL>>>` という区切り線を入れて記述してください。
+    """
+
     try:
         message = anthropic_client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=1500, temperature=0.3, system=system_prompt,
-            messages=[{"role": "user", "content": "連絡帳の下書きをお願いします。"}]
+            max_tokens=2000,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[{"role": "user", "content": f"以下のメモから作成してください：\n\n{memos}"}]
         )
         return message.content[0].text
     except Exception as e:
-        return f"生成エラー: {e}"
+        return f"エラー: {e}"
 
 # ---------------------------------------------------------
 # 4. UI実装
 # ---------------------------------------------------------
 
-# --- サイドバー（設定エリア） ---
+# --- サイドバー（設定・チューニング） ---
 with st.sidebar:
-    st.header("⚙️ 職員設定")
-    staff_data = get_staff_list()
-    current_staff = st.selectbox("担当者名", list(staff_data.keys()))
+    st.header("設定")
     
-    current_style = staff_data.get(current_staff, "")
+    # リスト取得
+    child_list, staff_list = get_lists()
+    if not staff_list: staff_list = ["職員A", "職員B"]
     
-    st.subheader("あなたの文章スタイル")
-    st.caption("AIに真似させたい、過去の自分の良い文章を貼り付けてください（箇条書きでも、実際のメールでも可）。")
-    new_style = st.text_area("文章例（チューニング用）", value=current_style, height=300)
+    staff_name = st.selectbox("担当職員", staff_list, key="staff_select")
     
-    if st.button("設定を保存"):
-        if save_staff_style(current_staff, new_style):
-            st.success("スタイルを学習しました")
-        else:
-            st.error("保存失敗（スプレッドシートmemberを確認してください）")
+    st.divider()
+    st.subheader("文体チューニング")
+    st.caption("あなたの「いつもの書き方」をここに貼り付けると、AIがそれを真似します。")
+    style_example = st.text_area(
+        "過去の連絡帳例", 
+        height=200, 
+        placeholder="例：\n本日は公園へ出かけました。〇〇くんは、滑り台が気に入ったようで、繰り返し楽しんでいました。\nおやつの時間は..."
+    )
 
 # --- メインエリア ---
-st.title("連絡帳メーカー Pro")
-st.caption(f"担当: {current_staff} さん")
+st.title("連絡帳作成")
 
-# 児童選択など（省略）
-child_name = "山田 太郎" # デモ用
+# 児童選択
+child_name = st.selectbox("対象児童", child_list)
 
-# セッション状態管理
-if "draft_text" not in st.session_state:
-    st.session_state.draft_text = ""
+# タブ構成
+tab1, tab2 = st.tabs(["1. 素材入力 (メモ)", "2. 編集・出力"])
 
-# タブ構成はやめて、自然なフロー（上から下へ）にする
-# STEP 1: 情報収集
-st.subheader("1. 今日の記録")
-col_input, col_view = st.columns([1, 1])
-with col_input:
-    # 音声入力など
-    st.info("（ここに音声入力UI）")
-with col_view:
-    memos, _ = fetch_todays_memos(child_name)
-    st.text_area("収集されたメモ", memos, disabled=True, height=100)
-
-st.divider()
-
-# STEP 2: ドラフト生成
-col_gen_btn, _ = st.columns([1, 2])
-with col_gen_btn:
-    if st.button("✨ AIドラフトを作成", type="primary"):
-        with st.spinner(f"{current_staff}さんの文体を再現中..."):
-            draft = generate_draft(child_name, memos, current_staff, new_style)
-            st.session_state.draft_text = draft
-
-# STEP 3: 編集と確定（ここがUXの肝）
-if st.session_state.draft_text:
-    st.subheader("2. 編集・確認")
-    st.caption("AIの提案を修正してください。あなたの修正がAIを賢くします。")
+# --- タブ1：メモ入力 ---
+with tab1:
+    st.info("日中の様子を箇条書きや音声で入力してください。")
     
-    # 編集エリア（AIの出力をデフォルト値として入れる）
-    final_text = st.text_area("連絡帳エディタ", value=st.session_state.draft_text, height=300)
+    col_input1, col_input2 = st.columns(2)
     
-    col_copy, col_finish = st.columns([1, 1])
+    with col_input1:
+        # 音声入力
+        audio_val = st.audio_input("音声でメモ", key="audio_memo")
+        if audio_val:
+            with st.spinner("文字起こし中..."):
+                transcribed = transcribe_audio(audio_val)
+            if transcribed:
+                if save_memo(child_name, transcribed, staff_name):
+                    st.success("保存しました")
+                    st.rerun()
+
+    with col_input2:
+        # テキスト入力
+        text_val = st.text_input("テキストでメモ", key="text_memo")
+        if st.button("メモ追加"):
+            if text_val:
+                if save_memo(child_name, text_val, staff_name):
+                    st.success("保存しました")
+                    st.rerun()
     
-    with col_finish:
-        # 完了ボタン
-        if st.button("決定して記録する（完了）", type="primary", use_container_width=True):
-            # 裏側でスコア計算
-            score = calculate_similarity_score(st.session_state.draft_text, final_text)
-            
-            # 保存処理
-            save_report_log(child_name, final_text, current_staff, score, "Unchecked")
-            
-            st.success("保存しました！お疲れ様でした。")
-            
-            # スコアによるフィードバック（ユーザーには褒めるだけ、開発者には数値が見える）
-            if score > 0.9:
-                st.toast("素晴らしい！ほぼAIのまま使えましたね。", icon="🤖")
-            elif score > 0.6:
-                st.toast("記録完了。あなたの修正を学習しました。", icon="✨")
-            else:
-                st.toast("記録完了。大幅な修正お疲れ様です。", icon="💪")
-            
-            # クリップボード用表示（Streamlitの制限上、ユーザーにコピーさせる）
-            st.code(final_text, language=None)
-            st.caption("↑ 右上のボタンでコピーして連絡帳アプリに貼り付けてください")
+    st.divider()
+    st.subheader("本日の記録済みメモ")
+    current_memos = fetch_todays_memos(child_name)
+    if current_memos:
+        st.text_area("", current_memos, height=150, disabled=True)
+    else:
+        st.caption("まだ記録がありません")
+
+# --- タブ2：生成と編集 ---
+with tab2:
+    # State初期化
+    if "ai_draft" not in st.session_state: st.session_state.ai_draft = ""
+    if "editing_text" not in st.session_state: st.session_state.editing_text = ""
+
+    # 生成ボタン
+    if st.button("AIドラフトを作成する", type="primary", use_container_width=True):
+        memos = fetch_todays_memos(child_name)
+        if not memos:
+            st.error("メモがないため作成できません。")
+        else:
+            with st.spinner("AIが執筆中..."):
+                draft = generate_draft(child_name, memos, staff_name, style_example)
+                st.session_state.ai_draft = draft
+                st.session_state.editing_text = draft # 初期値としてセット
+    
+    # 編集エリア（生成されている場合のみ表示）
+    if st.session_state.ai_draft:
+        st.divider()
+        st.markdown("#### 編集エリア")
+        st.caption("AIが作成した下書きです。必要な部分を修正してください。")
+        
+        # ユーザーが編集するテキストエリア
+        final_text = st.text_area(
+            "内容を確認・修正",
+            value=st.session_state.editing_text,
+            height=400
+        )
+        
+        col_submit, col_copy = st.columns([1, 1])
+        
+        with col_submit:
+            if st.button("この内容で確定・保存", type="primary", use_container_width=True):
+                # 内部用メモの分離（保存用）
+                parts = final_text.split("<<<INTERNAL>>>")
+                public_text = parts[0].strip()
+                next_hint = parts[1].strip() if len(parts) > 1 else ""
+                
+                # 保存実行（AI生データ と 修正後データ の両方を送る）
+                if save_final_report(child_name, st.session_state.ai_draft, public_text, next_hint, staff_name):
+                    st.toast("保存しました！お疲れ様でした。")
+                    # ステートクリア
+                    st.session_state.ai_draft = ""
+                    st.session_state.editing_text = ""
+                    st.rerun()
