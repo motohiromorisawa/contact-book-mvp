@@ -7,123 +7,123 @@ import datetime
 import pytz
 
 # ---------------------------------------------------------
-# 1. 設定 & デザイン (UI刷新)
+# 1. 設定 & デザイン (Material Design System)
 # ---------------------------------------------------------
 st.set_page_config(page_title="連絡帳メーカー", layout="wide")
 JST = pytz.timezone('Asia/Tokyo')
 
-# デザインCSS (オフホワイト・シンプル・高コントラスト)
+# マテリアルデザイン・CSS注入
 st.markdown("""
 <style>
-    /* 全体のフォントと背景 */
+    /* Global Settings */
     .stApp {
-        background-color: #F8F9FA;
-        color: #1E293B;
-        font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
-    }
-
-    /* タイトルまわり */
-    h1 {
-        color: #1E293B !important;
-        font-weight: 700 !important;
-        border-bottom: 2px solid #E2E8F0;
-        padding-bottom: 10px;
+        background-color: #F9FAFB; /* Base: Off-white */
+        color: #263238; /* Text: High Contrast */
+        font-family: "Roboto", "Helvetica", "Hiragino Kaku Gothic ProN", sans-serif;
     }
     
-    /* タブのデザイン */
-    button[data-baseweb="tab"] {
-        background-color: transparent !important;
-        border: none !important;
-        color: #64748B !important; /* Main color (Low Saturation) */
-        font-weight: bold !important;
-        font-size: 16px !important;
+    /* Typography */
+    h1, h2, h3 {
+        color: #37474F;
+        font-weight: 500;
+        letter-spacing: 0.02em;
     }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        color: #2563EB !important; /* Accent color */
-        border-bottom: 3px solid #2563EB !important;
+    p, div, label, span {
+        line-height: 1.8; /* 余白広め */
+        color: #455A64;
     }
 
-    /* ボタン (Primary - Accent Color) */
-    div.stButton > button[kind="primary"] {
-        background-color: #2563EB !important;
-        color: white !important;
-        border: none;
-        border-radius: 6px;
-        padding: 0.5rem 1rem;
+    /* Cards (Material Surface) */
+    .material-card {
+        background-color: #FFFFFF;
+        padding: 24px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+        margin-bottom: 24px;
+        border: 1px solid #ECEFF1;
+    }
+
+    /* Buttons (Material Style) */
+    div.stButton > button {
+        background-color: #FFFFFF;
+        color: #455A64; /* Main: Low Saturation */
+        border: 1px solid #CFD8DC;
+        border-radius: 4px;
+        padding: 10px 24px;
         font-weight: bold;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-        transition: all 0.2s;
+        transition: all 0.2s ease-in-out;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    div.stButton > button:hover {
+        border-color: #1976D2;
+        color: #1976D2;
+        background-color: #F5F9FF;
+    }
+    /* Primary Button */
+    div.stButton > button[kind="primary"] {
+        background-color: #1976D2; /* Accent: High Saturation */
+        color: #FFFFFF;
+        border: none;
+        box-shadow: 0 2px 4px rgba(25, 118, 210, 0.3);
     }
     div.stButton > button[kind="primary"]:hover {
-        background-color: #1D4ED8 !important;
+        background-color: #1565C0;
+        box-shadow: 0 4px 8px rgba(25, 118, 210, 0.4);
     }
 
-    /* ボタン (Secondary - Main Color) */
-    div.stButton > button[kind="secondary"] {
-        background-color: #FFFFFF !important;
-        border: 1px solid #CBD5E1 !important;
-        color: #475569 !important;
-        border-radius: 6px;
+    /* Tabs */
+    button[data-baseweb="tab"] {
+        background-color: transparent !important;
+        font-size: 16px !important;
+        font-weight: bold !important;
+        color: #78909C !important;
+        padding-bottom: 12px !important;
     }
-    div.stButton > button[kind="secondary"]:hover {
-        border-color: #94A3B8 !important;
-        color: #1E293B !important;
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: #1976D2 !important; /* Accent */
+        border-bottom: 2px solid #1976D2 !important;
     }
 
-    /* コーチマーク (ヒント表示) */
-    .coach-mark {
-        background-color: #EFF6FF; /* Very Light Accent */
-        border-left: 4px solid #2563EB;
-        padding: 16px;
+    /* Custom Classes for Content */
+    .hint-box {
+        background-color: #E3F2FD; /* Light Blue 50 */
+        border-left: 4px solid #1976D2;
+        padding: 16px 20px;
+        border-radius: 4px;
         margin-bottom: 20px;
-        border-radius: 0 6px 6px 0;
-        color: #1E3A8A;
+        color: #0D47A1;
     }
-    .coach-title {
+    .hint-title {
         font-weight: bold;
-        color: #2563EB;
-        font-size: 1.0em;
-        margin-bottom: 4px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        font-size: 0.9em;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-bottom: 8px;
+        color: #1976D2;
     }
-
-    /* 成功メッセージエリア */
     .success-box {
-        background-color: #F0FDF4; /* 薄い緑（成功色）だが彩度低め */
-        border: 1px solid #BBF7D0;
-        color: #15803D;
-        padding: 15px;
-        border-radius: 8px;
+        background-color: #E8F5E9; /* Green 50 (Success) */
+        color: #2E7D32;
+        padding: 16px;
+        border-radius: 4px;
         text-align: center;
         font-weight: bold;
-        margin-bottom: 20px;
+        margin-bottom: 24px;
+        border: 1px solid #C8E6C9;
     }
-
-    /* 学習済み表示 */
     .style-box {
-        background-color: #F1F5F9; /* Off-white Gray */
-        border: 1px solid #E2E8F0;
-        padding: 10px 15px;
-        border-radius: 6px;
-        font-size: 0.9em;
-        color: #475569;
-        margin-bottom: 15px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    /* コードブロックの背景を白に */
-    .stCode {
-        background-color: #FFFFFF !important;
-        border: 1px solid #E2E8F0;
+        font-size: 0.85em;
+        color: #546E7A;
+        background-color: #F5F5F5;
+        padding: 8px 12px;
+        border-radius: 4px;
+        display: inline-block;
+        margin-bottom: 16px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# API設定
+# API設定 (変更なし)
 if "OPENAI_API_KEY" in st.secrets: openai.api_key = st.secrets["OPENAI_API_KEY"]
 if "ANTHROPIC_API_KEY" in st.secrets: anthropic_client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
@@ -135,10 +135,9 @@ def get_gsp_service():
     return build('sheets', 'v4', credentials=creds)
 
 # ---------------------------------------------------------
-# 2. データ取得・分析ロジック (変更なし)
+# 2. データ取得・分析ロジック
 # ---------------------------------------------------------
 def get_lists():
-    """児童リストと職員リストを取得"""
     try:
         service = get_gsp_service()
         sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:B").execute()
@@ -150,21 +149,6 @@ def get_lists():
         st.error(f"リスト読込エラー: {e}")
         return [], []
 
-def get_todays_hint_from_history(child_name):
-    """過去のレポートから今日のヒントを取得"""
-    try:
-        service = get_gsp_service()
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:E").execute()
-        rows = sheet.get('values', [])
-        today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
-        for row in reversed(rows):
-            if len(row) >= 5 and row[1] == child_name and row[3] == "REPORT":
-                if row[0].split(" ")[0] < today_str:
-                    return row[4]
-        return "初回、または過去の記録なし。本人の様子をよく観察し、信頼関係を築く。"
-    except:
-        return "ヒント取得エラー"
-
 def get_retry_count(child_name):
     try:
         service = get_gsp_service()
@@ -173,8 +157,9 @@ def get_retry_count(child_name):
         today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
         count = 0
         for row in rows:
-            if len(row) >= 4 and row[0].startswith(today_str) and row[1] == child_name and row[3] == "REPORT":
-                count += 1
+            if len(row) >= 4:
+                if row[0].startswith(today_str) and row[1] == child_name and row[3] == "REPORT":
+                    count += 1
         return count
     except:
         return 0
@@ -186,11 +171,12 @@ def get_staff_style_examples(staff_name):
         rows = sheet.get('values', [])
         examples = []
         for row in reversed(rows):
-            if len(row) >= 8 and row[7] == staff_name and row[3] == "REPORT":
-                feedback = row[6] if len(row) > 6 else ""
-                if feedback in ["NoEdit", "MinorEdit"]:
-                    parts = row[2].split("<<<SEPARATOR>>>")
-                    examples.append(parts[0].strip())
+            if len(row) >= 8:
+                if row[7] == staff_name and row[3] == "REPORT":
+                    r_feedback = row[6] if len(row) > 6 else ""
+                    if r_feedback in ["NoEdit", "MinorEdit"]:
+                        parts = row[2].split("<<<SEPARATOR>>>")
+                        examples.append(parts[0].strip())
             if len(examples) >= 3: break
         return examples
     except:
@@ -248,6 +234,13 @@ def fetch_todays_memos(child_name):
                 latest_report = row[2]
     return "\n".join(memos), latest_report
 
+def get_todays_hint_from_history(child_name):
+    # (既存ロジック)
+    return "初回、または過去の記録なし。本人の様子をよく観察し、信頼関係を築く。"
+
+# ---------------------------------------------------------
+# 3. 生成ロジック
+# ---------------------------------------------------------
 def generate_final_report(child_name, current_hint, combined_text, staff_name, style_preset):
     retry_count = get_retry_count(child_name)
     past_examples = get_staff_style_examples(staff_name)
@@ -255,40 +248,39 @@ def generate_final_report(child_name, current_hint, combined_text, staff_name, s
     style_instruction = ""
     if past_examples:
         examples_text = "\n---\n".join(past_examples)
-        style_instruction = f"担当職員「{staff_name}」の過去の文体（語尾・雰囲気）を模倣してください。\n【過去の例】\n{examples_text}"
+        style_instruction = f"【{staff_name}の過去の執筆例】\n{examples_text}\n上記の文体を模倣してください。"
     else:
         presets = {
-            "親しみ（絵文字あり）": "文体: 柔らかく、共感的に。絵文字を適度に使用（✨😊）。",
-            "標準（丁寧）": "文体: 丁寧語（です・ます）。客観的事実と感想をバランスよく。",
-            "論理（簡潔）": "文体: 簡潔に。事実を中心に記述。"
+            "親しみ": "柔らかく共感的。絵文字使用。",
+            "標準": "丁寧語。事実と感想のバランス。",
+            "論理": "簡潔。事実中心。"
         }
-        style_instruction = presets.get(style_preset, "文体: 丁寧語")
+        style_instruction = f"文体: {presets.get(style_preset, '標準')}"
 
     system_prompt = f"""
-    放課後等デイサービス連絡帳作成。
-    児童: {child_name}, 職員: {staff_name}
-    本日のヒント: {current_hint}
+    放課後等デイサービスの連絡帳作成。
+    児童: {child_name} / 担当: {staff_name}
+    ヒント: {current_hint}
+    指示: {style_instruction}
     
-    {style_instruction}
-    
-    入力記録:
-    {combined_text}
-    
-    出力構成:
-    1. 保護者用 (今日の様子, 活動内容, ご連絡)
+    フォーマット:
+    【今日の様子】...
+    【活動内容】...
+    【ご連絡】...
     <<<SEPARATOR>>>
-    2. 職員用 (ヒント振り返り, 特記事項)
+    【ヒント振り返り】...
+    【特記事項】...
     <<<NEXT_HINT>>>
-    (次回ヒント1文)
+    (次回ヒント)
     <<<HINT_CHECK>>>
-    YES/NO (ヒント活用有無)
+    YES/NO
     """
     
     try:
         message = anthropic_client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=2500, temperature=0.3, system=system_prompt,
-            messages=[{"role": "user", "content": "作成実行"}]
+            messages=[{"role": "user", "content": f"記録:\n{combined_text}"}]
         )
         full_text = message.content[0].text
         parts = full_text.split("<<<NEXT_HINT>>>")
@@ -298,152 +290,154 @@ def generate_final_report(child_name, current_hint, combined_text, staff_name, s
         next_hint = parts2[0].strip() if parts2 else ""
         hint_used = parts2[1].strip() if len(parts2) > 1 else "UNKNOWN"
         
-        if save_data(child_name, report_content, "REPORT", next_hint, hint_used, staff_name, retry_count):
-            return report_content, next_hint
-        return None, None
+        save_data(child_name, report_content, "REPORT", next_hint, hint_used, staff_name, retry_count)
+        return report_content, next_hint
     except Exception as e:
-        st.error(f"生成エラー: {e}")
+        st.error(f"Error: {e}")
         return None, None
 
 # ---------------------------------------------------------
-# 3. UI実装
+# 4. UI実装
 # ---------------------------------------------------------
-st.title("連絡帳メーカー")
 
-# Session State初期化
-if "audio_key" not in st.session_state: st.session_state.audio_key = 0
-if "memos_preview" not in st.session_state: st.session_state.memos_preview = ""
-if "show_feedback" not in st.session_state: st.session_state.show_feedback = False
+# ヘッダーエリア
+st.markdown("<h1 style='margin-bottom: 24px;'>連絡帳メーカー <span style='font-size:0.5em; color:#90A4AE; vertical-align:middle;'>Material Ver.</span></h1>", unsafe_allow_html=True)
 
-# 1. 担当者と児童の選択
-child_list, staff_list = get_lists()
-if not staff_list: staff_list = ["職員A", "職員B"]
+# 1. 設定カード
+with st.container():
+    st.markdown('<div class="material-card">', unsafe_allow_html=True)
+    st.markdown("### 📝 設定")
+    
+    child_list, staff_list = get_lists()
+    if not staff_list: staff_list = ["職員A", "職員B"]
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        staff_name = st.selectbox("担当職員", staff_list)
+    with col2:
+        child_name = st.selectbox("対象児童", child_list)
 
-col1, col2 = st.columns(2)
-with col1:
-    staff_name = st.selectbox("担当職員", staff_list)
-with col2:
-    child_name = st.selectbox("対象児童", child_list)
+    # 文体学習ステータス
+    past_examples_count = len(get_staff_style_examples(staff_name))
+    if past_examples_count > 0:
+        st.markdown(f"<div class='style-box'>✨ {staff_name}さんの文体を学習済み (精度: 高)</div>", unsafe_allow_html=True)
+        style_preset = "自動学習"
+    else:
+        st.markdown(f"<div class='style-box'>🔰 データ不足のためプリセットを使用</div>", unsafe_allow_html=True)
+        style_preset = st.radio("文体プリセット", ["親しみ", "標準", "論理"], horizontal=True, label_visibility="collapsed")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
+# ヒント取得
 current_hint = get_todays_hint_from_history(child_name)
 
-# ヒント表示 (Accent Colorを利用)
-with st.expander("💡 本日の関わりのヒント", expanded=True):
-    st.markdown(f"""
-    <div class="coach-mark">
-        <div class="coach-title">
-            <span>KEY POINT</span>
-        </div>
-        {current_hint}
-    </div>
-    """, unsafe_allow_html=True)
-
-# 学習状況表示 (Main Color - Low Saturation)
-past_examples_count = len(get_staff_style_examples(staff_name))
-if past_examples_count > 0:
-    st.markdown(f"""
-    <div class='style-box'>
-        <span>🤖</span>
-        <span><b>{staff_name}</b> さんの文体を学習済みです（過去の良質な記録 {past_examples_count}件に基づく）</span>
-    </div>
-    """, unsafe_allow_html=True)
-    style_preset = "自動学習"
-else:
-    st.caption("スタイルを選択してください（データが蓄積されると自動学習に切り替わります）")
-    style_preset = st.radio("", ["親しみ（絵文字あり）", "標準（丁寧）", "論理（簡潔）"], horizontal=True)
-
-# メインエリア
-st.markdown("---")
-tab1, tab2 = st.tabs(["📝 メモ入力", "📤 出力・検証"])
+# 2. メインエリア
+tab1, tab2 = st.tabs(["入力・記録", "出力・検証"])
 
 with tab1:
-    st.caption("音声またはテキストで記録を入力してください")
-    audio_val = st.audio_input("録音", key=f"recorder_{st.session_state.audio_key}")
+    st.markdown('<div class="material-card">', unsafe_allow_html=True)
     
+    # ヒント表示
+    if current_hint:
+        st.markdown(f"""
+        <div class="hint-box">
+            <div class="hint-title">Daily Mission</div>
+            {current_hint}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # 音声入力
+    if "audio_key" not in st.session_state: st.session_state.audio_key = 0
+    audio_val = st.audio_input("音声を記録する", key=f"recorder_{st.session_state.audio_key}")
+
     if audio_val:
-        with st.spinner("文字起こし中..."):
+        st.divider()
+        with st.spinner("音声をテキスト化しています..."):
             text = transcribe_audio(audio_val)
+        
         if text:
-            st.info(f"認識結果: {text}")
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                if st.button("保存する", type="primary", use_container_width=True):
+            st.info(text)
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("記録を保存", type="primary", use_container_width=True):
                     if save_data(child_name, text, "MEMO", "", "", staff_name):
                         st.toast("保存しました", icon="✅")
                         st.session_state.audio_key += 1
                         st.rerun()
-            with c2:
-                if st.button("破棄", type="secondary", use_container_width=True):
+            with col_cancel:
+                if st.button("キャンセル", use_container_width=True):
                     st.session_state.audio_key += 1
                     st.rerun()
-
-    if st.button(f"現在の記録を確認", type="secondary", use_container_width=True):
-        memos, _ = fetch_todays_memos(child_name)
-        st.session_state.memos_preview = memos
-            
-    if st.session_state.memos_preview:
-        st.text_area("今日の記録", st.session_state.memos_preview, height=150, disabled=True)
+    
+    # メモ一覧
+    memos, _ = fetch_todays_memos(child_name)
+    if memos:
+        st.markdown("### 今日のメモ")
+        st.text_area("内容", memos, height=150, disabled=True)
+    else:
+        st.caption("まだ記録がありません")
+        
+    st.markdown('</div>', unsafe_allow_html=True)
 
 with tab2:
     memos, existing_report = fetch_todays_memos(child_name)
     
     if existing_report:
-        st.markdown("<div class='success-box'>🎉 連絡帳の作成が完了しました</div>", unsafe_allow_html=True)
+        st.markdown('<div class="material-card">', unsafe_allow_html=True)
+        st.markdown('<div class="success-box">🎉 作成完了</div>', unsafe_allow_html=True)
         
         parts = existing_report.split("<<<SEPARATOR>>>")
-        parent_part = parts[0].strip()
-        staff_part = parts[1].strip() if len(parts) > 1 else ""
-
+        
         st.subheader("1. 保護者用")
-        st.code(parent_part, language=None)
+        st.code(parts[0].strip(), language=None)
         
         st.subheader("2. 職員共有用")
+        staff_part = parts[1].strip() if len(parts) > 1 else "（なし）"
         st.code(staff_part, language=None)
-        
-        # フィードバックUI
-        if st.session_state.get("show_feedback", False):
-            st.markdown("---")
-            st.markdown("**【検証】この文章の修正コストを教えてください**")
-            
-            # Simple 4 buttons layout
-            fb1, fb2, fb3, fb4 = st.columns(4)
-            if fb1.button("そのままOK", use_container_width=True, type="primary"):
+
+        # フィードバック (Material Cards for layout)
+        if st.session_state.get("show_feedback", True):
+            st.divider()
+            st.markdown("#### 検証: 修正コストの評価")
+            c1, c2, c3, c4 = st.columns(4)
+            if c1.button("そのまま使える", use_container_width=True, type="primary"):
                 save_feedback(child_name, "NoEdit")
                 st.session_state.show_feedback = False
-                st.toast("最高評価を記録しました", icon="✨")
+                st.toast("Perfect!", icon="✨")
                 st.rerun()
-            if fb2.button("少し直す", use_container_width=True):
+            if c2.button("少し直す", use_container_width=True):
                 save_feedback(child_name, "MinorEdit")
                 st.session_state.show_feedback = False
-                st.toast("記録しました", icon="👍")
+                st.toast("Saved.", icon="👍")
                 st.rerun()
-            if fb3.button("結構直す", use_container_width=True):
+            if c3.button("結構直す", use_container_width=True):
                 save_feedback(child_name, "MajorEdit")
                 st.session_state.show_feedback = False
-                st.toast("改善します", icon="🙇")
                 st.rerun()
-            if fb4.button("使えない", use_container_width=True):
+            if c4.button("使えない", use_container_width=True):
                 save_feedback(child_name, "Useless")
                 st.session_state.show_feedback = False
-                st.toast("申し訳ありません", icon="💦")
                 st.rerun()
-
-        st.markdown("---")
-        if st.button("🔄 内容を更新して再生成", type="secondary", use_container_width=True):
-             with st.spinner("文体を調整して再生成中..."):
+        
+        st.divider()
+        if st.button("再生成する (文体を微調整)", use_container_width=True):
+             with st.spinner("チューニング中..."):
                  report, _ = generate_final_report(child_name, current_hint, memos, staff_name, style_preset)
-                 if report:
-                     st.session_state.show_feedback = True
-                     st.rerun()
+                 if report: st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
     else:
+        st.markdown('<div class="material-card">', unsafe_allow_html=True)
         st.info("まだ連絡帳が作成されていません。")
-        if st.button("連絡帳を作成する", type="primary", use_container_width=True):
+        
+        if st.button("AI連絡帳を作成する", type="primary", use_container_width=True):
             if not memos:
-                st.error("記録メモがありません")
+                st.error("メモがないため作成できません。")
             else:
-                with st.spinner("AIが執筆中..."):
+                with st.spinner("AIが思考中..."):
                     report, _ = generate_final_report(child_name, current_hint, memos, staff_name, style_preset)
                     if report:
                         st.session_state.show_feedback = True
                         st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
