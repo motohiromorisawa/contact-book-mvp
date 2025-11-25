@@ -30,12 +30,15 @@ st.markdown("""
         display: inline-block;
         margin-bottom: 10px;
     }
-    .copy-box {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #d6d6d6;
+    .saved-badge {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid #c3e6cb;
         margin-bottom: 10px;
+        text-align: center;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -120,6 +123,7 @@ def save_final_report(child_name, ai_draft, final_text, next_hint, staff_name):
     return True
 
 def fetch_todays_memos(child_name):
+    """当日のメモ一覧を取得"""
     service = get_gsp_service()
     sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:E").execute()
     rows = sheet.get('values', [])
@@ -130,6 +134,30 @@ def fetch_todays_memos(child_name):
             memos.append(f"・{row[0][11:16]} [{row[4]}] {row[2]}")
     return "\n".join(memos)
 
+def get_todays_report(child_name):
+    """
+    当日の既に作成済みレポートがあれば取得して返す（永続化対応）
+    戻り値: (public_text, internal_text) または (None, None)
+    """
+    try:
+        service = get_gsp_service()
+        # 最新のデータから探すため全取得
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:F").execute()
+        rows = sheet.get('values', [])
+        today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
+        
+        # 後ろから走査して、今日の最新のREPORTを探す
+        for row in reversed(rows):
+            if len(row) >= 4:
+                # 日付一致 AND 名前一致 AND タイプがREPORT
+                if row[0].startswith(today_str) and row[1] == child_name and row[3] == "REPORT":
+                    final_text = row[2]
+                    next_hint = row[5] if len(row) > 5 else ""
+                    return final_text, next_hint
+        return None, None
+    except:
+        return None, None
+
 def transcribe_audio(audio_file):
     try:
         transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
@@ -137,38 +165,38 @@ def transcribe_audio(audio_file):
     except: return None
 
 # ---------------------------------------------------------
-# 3. 生成ロジック（会話ログ対応版）
+# 3. 生成ロジック（主観・想い対応版）
 # ---------------------------------------------------------
 def generate_draft(child_name, memos, staff_name, manual_style):
     
-    # 過去データの取得
     dynamic_examples = get_high_diff_examples(staff_name, limit=3)
     dynamic_instruction = ""
     if dynamic_examples:
         examples_str = "\n\n".join([f"---修正例{i+1}---\n{ex}" for i, ex in enumerate(dynamic_examples)])
-        dynamic_instruction = f"【{staff_name}さんの過去の修正パターン（重要）】\n{examples_str}"
+        dynamic_instruction = f"【{staff_name}さんの過去の修正パターン】\n{examples_str}"
 
     manual_instruction = ""
     if manual_style:
-        manual_instruction = f"【{staff_name}さんの文体見本（コピペ）】\n{manual_style}\n※内容は無視し、口調だけ真似てください。"
+        manual_instruction = f"【{staff_name}さんの文体見本（コピペ）】\n{manual_style}\n※口調だけ真似てください。"
 
     system_prompt = f"""
     あなたは放課後等デイサービスの熟練スタッフ「{staff_name}」です。
     提供された「活動中の会話ログ」や「メモ」から、保護者への連絡帳を作成します。
 
-    # 入力情報の性質（最重要）
-    今回の入力データは、**「子どもとの活動中に録音された会話そのもの」**が含まれています。
-    
-    ## 処理のルール
-    1. **会話のフィルタリング**:
-       - 「すごいね！」「貸してごらん」「順番だよ」といったスタッフの発言は、**事実（「順番を守るよう促しました」「褒めると嬉しそうでした」）に変換**してください。
-       - そのまま「スタッフが『すごいね』と言いました」と書かないでください。
-    
-    2. **事実の抽出**:
-       - 会話の中から「何をして遊んでいるか」「誰と関わっているか」「どんな反応か」を抜き出してください。
+    # 入力情報の性質
+    入力データには、活動中の会話やスタッフの発言が含まれています。
 
-    3. **子どもの発言**:
-       - 子どもの言葉（「やりたい！」「やだ」など）は、臨場感を伝えるためにカギカッコ『』で引用してください。
+    # 記述の方針（重要）
+    
+    1. **事実と感想の明確な区別**:
+       - 事実（何をしたか）と、感想（どう感じたか）を混同しないように記述してください。
+       
+    2. **主観（スタッフの想い）の表現**:
+       - 単なる事実報告書にしないでください。
+       - 事実を述べた後、「〜という姿に成長を感じました」「〜という笑顔が見られて私も嬉しかったです」といった、**担当者としての主観的な感想（Iメッセージ）**を一言添えて、温かみを出してください。
+    
+    3. **会話からの変換**:
+       - 「すごいね！」等の発言ログは、「〜と声をかけると、嬉しそうにしていました」のように状況描写に変換してください。
 
     # 文体・スタイル
     {manual_instruction}
@@ -180,21 +208,22 @@ def generate_draft(child_name, memos, staff_name, manual_style):
 
     # 出力構成
     【今日の{child_name}さん】
-    （一言で）
+    （一言でその日のハイライト）
 
     【活動内容】
     ・[活動1]
     ・[活動2]
 
     【印象的だった場面】
-    [具体的なエピソード]
+    [具体的なエピソード（事実）]
+    [★ここに関連するスタッフの感想・主観を一言添える]
 
     【ご連絡】
     [あれば]
 
     <<<INTERNAL>>>
     【職員間申し送り】
-    [保護者に見せない内部共有事項]
+    [内部共有事項]
     """
 
     try:
@@ -210,7 +239,6 @@ def generate_draft(child_name, memos, staff_name, manual_style):
 # 4. UI実装
 # ---------------------------------------------------------
 
-# サイドバー
 with st.sidebar:
     st.title("設定")
     child_list, staff_list, _ = get_lists_and_profile(None)
@@ -224,19 +252,18 @@ with st.sidebar:
     if st.button("設定を保存"):
         if save_staff_profile(selected_staff, style_input): st.toast("保存しました")
 
-# メイン
 st.title("連絡帳メーカー")
 st.markdown(f'<div class="current-staff">👤 担当者: {selected_staff}</div>', unsafe_allow_html=True)
 child_name = st.selectbox("対象児童", child_list)
 
 tab1, tab2 = st.tabs(["1. 録音・記録", "2. 作成・出力"])
 
-# Tab 1: 録音・記録
+# --- Tab 1: 録音・記録 ---
 with tab1:
     if "audio_key" not in st.session_state: st.session_state.audio_key = 0
     if "text_key" not in st.session_state: st.session_state.text_key = 0
 
-    st.info("💡 活動中に録音ボタンを押して、そのままポケットに入れてください。会話からAIが活動内容を拾います。")
+    st.info("💡 活動中に録音ボタンを押して、会話や様子を記録してください。")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -260,43 +287,47 @@ with tab1:
     st.divider()
     st.text_area("本日の記録（AI分析対象）", fetch_todays_memos(child_name), height=200, disabled=True)
 
-# Tab 2: 作成・出力
+# --- Tab 2: 作成・出力 ---
 with tab2:
-    # ステート管理
     if "ai_draft" not in st.session_state: st.session_state.ai_draft = ""
-    if "save_success" not in st.session_state: st.session_state.save_success = False
-    if "final_public" not in st.session_state: st.session_state.final_public = ""
-    if "final_internal" not in st.session_state: st.session_state.final_internal = ""
+    
+    # ★重要変更: 児童が選択された時点で、既に保存されたレポートがあるか確認する
+    # これにより、別の子の入力後に戻ってきてもデータが消えない
+    existing_public, existing_internal = get_todays_report(child_name)
 
-    # --- A. 保存完了後の表示 (コピペ用画面) ---
-    if st.session_state.save_success:
-        st.success("🎉 保存しました！各ツールに貼り付けてください。")
+    # A. 既に本日のレポートが存在する場合（コピペ画面を表示）
+    if existing_public:
+        st.markdown(f"<div class='saved-badge'>✅ {child_name}さんの本日の連絡帳は作成済みです</div>", unsafe_allow_html=True)
         
-        st.markdown("##### 1. 保護者用（連絡帳アプリ・メールへ）")
-        st.code(st.session_state.final_public, language=None)
+        st.markdown("##### 1. 保護者用")
+        st.code(existing_public, language=None)
         
-        if st.session_state.final_internal:
+        if existing_internal:
             st.divider()
-            st.markdown("##### 2. 職員用（日報・申し送りへ）")
-            st.code(st.session_state.final_internal, language=None)
+            st.markdown("##### 2. 職員用（申し送り）")
+            st.code(existing_internal, language=None)
             
         st.divider()
-        if st.button("次の児童へ（リセット）", type="primary", use_container_width=True):
-            # ステートを全クリア
-            st.session_state.ai_draft = ""
-            st.session_state.save_success = False
-            st.session_state.final_public = ""
-            st.session_state.final_internal = ""
-            st.rerun()
+        with st.expander("内容を修正して保存し直す"):
+            # 再編集用のエディタ
+            re_edit_text = st.text_area("修正用エディタ", value=f"{existing_public}\n<<<INTERNAL>>>\n{existing_internal}", height=300)
+            if st.button("修正版を上書き保存", type="primary"):
+                 parts = re_edit_text.split("<<<INTERNAL>>>")
+                 pub = parts[0].strip()
+                 intr = parts[1].strip() if len(parts) > 1 else ""
+                 # AIドラフトは不明なので空文字、またはそのままにしておく
+                 if save_final_report(child_name, "", pub, intr, selected_staff):
+                     st.toast("修正版を保存しました")
+                     st.rerun()
 
-    # --- B. 作成・編集画面 ---
+    # B. まだ作成されていない場合（ドラフト作成画面）
     else:
         if st.button("AIドラフト作成", type="primary", use_container_width=True):
             memos = fetch_todays_memos(child_name)
             if not memos:
                 st.error("記録がありません")
             else:
-                with st.spinner("会話ログから事実を抽出して執筆中..."):
+                with st.spinner("会話ログから執筆中（事実と感想を整理しています...）"):
                     draft = generate_draft(child_name, memos, selected_staff, style_input)
                     st.session_state.ai_draft = draft
 
@@ -310,8 +341,7 @@ with tab2:
                 internal = parts[1].strip() if len(parts) > 1 else ""
                 
                 if save_final_report(child_name, st.session_state.ai_draft, public, internal, selected_staff):
-                    # 保存成功フラグを立てて、結果を表示するための変数に格納
-                    st.session_state.save_success = True
-                    st.session_state.final_public = public
-                    st.session_state.final_internal = internal
+                    st.toast("保存しました！")
+                    # ステートをクリアして再読み込み（そうするとAのブロックに入り、コピペ画面になる）
+                    st.session_state.ai_draft = ""
                     st.rerun()
