@@ -302,22 +302,41 @@ child_name = st.selectbox("対象児童", child_list)
 
 tab1, tab2 = st.tabs(["1. メモ入力", "2. 編集・保存"])
 
-# --- Tab 1 ---
+# --- Tab 1: メモ入力 ---
 with tab1:
+    # セッションステート初期化（リセット用キー）
+    if "audio_uploader_key" not in st.session_state:
+        st.session_state.audio_uploader_key = 0
+
     col1, col2 = st.columns(2)
+    
     with col1:
-        audio = st.audio_input("音声メモ")
+        # keyを動的に設定することで、保存後にリセットできるようにする
+        audio = st.audio_input(
+            "音声メモ", 
+            key=f"audio_recorder_{st.session_state.audio_uploader_key}"
+        )
+        
         if audio:
             with st.spinner("文字起こし中..."):
                 text = transcribe_audio(audio)
+            
+            # 保存成功時の処理
             if text and save_memo(child_name, text, selected_staff):
-                st.toast("保存しました")
+                st.toast("保存しました", icon="✅")
+                
+                # ここが修正ポイント: キー番号を進めて、次のリロードで入力欄を空にする
+                st.session_state.audio_uploader_key += 1
                 st.rerun()
+
     with col2:
-        text = st.text_input("テキストメモ")
+        # テキスト入力も同様にリセットしたい場合はkey管理推奨ですが、
+        # st.text_inputは clear_on_submit がないので、
+        # ここでは単純な実装のままにしています（テキストは無限ループしにくいため）
+        text = st.text_input("テキストメモ", key="text_memo_input")
         if st.button("追加"):
             if text and save_memo(child_name, text, selected_staff):
-                st.toast("保存しました")
+                st.toast("保存しました", icon="✅")
                 st.rerun()
 
     st.divider()
