@@ -76,7 +76,9 @@ def get_lists_and_profile(target_staff_name=None):
                     if len(row) > 2: current_profile = row[2]
                     break
         return children, staffs, current_profile
-    except: return [], [], ""
+    except Exception as e:
+        st.error(f"データ取得エラー: {str(e)}")
+        return [], [], ""
 
 def save_staff_profile(staff_name, profile_text):
     try:
@@ -92,7 +94,9 @@ def save_staff_profile(staff_name, profile_text):
             service.spreadsheets().values().update(spreadsheetId=SPREADSHEET_ID, range=f"member!C{update_index + 1}", valueInputOption="USER_ENTERED", body=body).execute()
             return True
         return False
-    except: return False
+    except Exception as e:
+        st.error(f"プロファイル保存エラー: {str(e)}")
+        return False
 
 def get_high_diff_examples(staff_name, limit=3):
     try:
@@ -107,7 +111,9 @@ def get_high_diff_examples(staff_name, limit=3):
                     candidates.append({"text": row[2], "diff": 1.0 - similarity})
         candidates.sort(key=lambda x: x["diff"], reverse=True)
         return [item["text"] for item in candidates[:limit]]
-    except: return []
+    except Exception as e:
+        st.error(f"例文取得エラー: {str(e)}")
+        return []
 
 def save_memo(child_name, text, staff_name):
     service = get_gsp_service()
@@ -156,14 +162,17 @@ def get_todays_report(child_name):
                     next_hint = row[5] if len(row) > 5 else ""
                     return final_text, next_hint
         return None, None
-    except:
+    except Exception as e:
+        st.error(f"今日のレポート取得エラー: {str(e)}")
         return None, None
 
 def transcribe_audio(audio_file):
     try:
         transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
         return transcript.text
-    except: return None
+    except Exception as e:
+        st.error(f"音声転写エラー: {str(e)}")
+        return None
 
 # ---------------------------------------------------------
 # 3. 生成ロジック（主観・想い対応版）
@@ -230,7 +239,9 @@ def generate_draft(child_name, memos, staff_name, manual_style):
             messages=[{"role": "user", "content": "下書きを作成してください"}]
         )
         return message.content[0].text
-    except: return "エラーが発生しました"
+    except Exception as e:
+        st.error(f"AI下書き生成エラー: {str(e)}")
+        return "エラーが発生しました"
 
 # ---------------------------------------------------------
 # 4. UI実装
