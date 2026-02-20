@@ -22,4 +22,16 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          direct_pr: true
+      - name: Create PR for claude/* branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH=$(git branch -r --list 'origin/claude/*' --sort=-committerdate | head -1 | sed 's|origin/||')
+          if [ -n "$BRANCH" ]; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "$(git log origin/$BRANCH -1 --pretty=%s)" \
+              --body "Auto-created PR from branch \`$BRANCH\`." \
+              --repo "$GITHUB_REPOSITORY" || true
+          fi
