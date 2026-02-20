@@ -171,7 +171,7 @@ def save_staff_custom_prompt_internal(staff_name, custom_prompt_internal):
 def get_high_diff_examples(staff_name, limit=3):
     try:
         service = get_gsp_service()
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G").execute()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
         rows = sheet.get('values', [])
         candidates = []
         for row in rows:
@@ -185,18 +185,19 @@ def get_high_diff_examples(staff_name, limit=3):
         st.error(f"例文取得エラー: {str(e)}")
         return []
 
-def save_memo(child_name, text, staff_name):
+def save_memo(child_name, text, staff_name, is_highlight=False):
     service = get_gsp_service()
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    body = {'values': [[now, child_name, text, "MEMO", staff_name]]}
-    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:E", valueInputOption="USER_ENTERED", body=body).execute()
+    tag = "HIGHLIGHT" if is_highlight else ""
+    body = {'values': [[now, child_name, text, "MEMO", staff_name, "", "", tag]]}
+    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H", valueInputOption="USER_ENTERED", body=body).execute()
     return True
 
 def save_final_report(child_name, ai_draft, final_text, next_hint, staff_name):
     service = get_gsp_service()
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    body = {'values': [[now, child_name, final_text, "REPORT", staff_name, next_hint, ai_draft]]}
-    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G", valueInputOption="USER_ENTERED", body=body).execute()
+    body = {'values': [[now, child_name, final_text, "REPORT", staff_name, next_hint, ai_draft, ""]]}
+    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H", valueInputOption="USER_ENTERED", body=body).execute()
     return True
 
 def save_ai_draft_temp(child_name, ai_draft, staff_name):
@@ -204,20 +205,21 @@ def save_ai_draft_temp(child_name, ai_draft, staff_name):
     service = get_gsp_service()
     now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     # 本文を空にして、AIドラフトのみ保存（未確定状態を表す）
-    body = {'values': [[now, child_name, "", "REPORT", staff_name, "", ai_draft]]}
-    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G", valueInputOption="USER_ENTERED", body=body).execute()
+    body = {'values': [[now, child_name, "", "REPORT", staff_name, "", ai_draft, ""]]}
+    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H", valueInputOption="USER_ENTERED", body=body).execute()
     return True
 
 def fetch_todays_memos(child_name):
     """当日のメモ一覧を取得"""
     service = get_gsp_service()
-    sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:E").execute()
+    sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
     rows = sheet.get('values', [])
     today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
     memos = []
     for row in rows:
         if len(row) >= 5 and row[1] == child_name and row[0].startswith(today_str) and row[3] == "MEMO":
-            memos.append(f"・{row[0][11:16]} [{row[4]}] {row[2]}")
+            highlight_tag = "⭐" if len(row) > 7 and row[7] == "HIGHLIGHT" else ""
+            memos.append(f"・{row[0][11:16]} [{row[4]}] {highlight_tag}{row[2]}")
     return "\n".join(memos)
 
 def get_todays_report(child_name):
@@ -228,7 +230,7 @@ def get_todays_report(child_name):
     try:
         service = get_gsp_service()
         # 最新のデータから探すため全取得
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:F").execute()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
         rows = sheet.get('values', [])
         today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
         
@@ -252,8 +254,8 @@ def get_todays_ai_draft(child_name):
     """
     try:
         service = get_gsp_service()
-        # G列（AIドラフト）も含めて全取得
-        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G").execute()
+        # H列（タグ）も含めて全取得
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
         rows = sheet.get('values', [])
         today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
         
@@ -347,6 +349,28 @@ def get_default_internal_prompt(child_name, staff_name, manual_instruction, dyna
     {dynamic_instruction}
     """
 
+def fetch_todays_memos_with_tags(child_name):
+    """当日のメモをタグ付き情報込みで取得"""
+    service = get_gsp_service()
+    sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
+    rows = sheet.get('values', [])
+    today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
+    
+    highlighted_memos = []
+    normal_memos = []
+    
+    for row in rows:
+        if len(row) >= 5 and row[1] == child_name and row[0].startswith(today_str) and row[3] == "MEMO":
+            memo_text = f"・{row[0][11:16]} [{row[4]}] {row[2]}"
+            if len(row) > 7 and row[7] == "HIGHLIGHT":
+                highlighted_memos.append(memo_text)
+            else:
+                normal_memos.append(memo_text)
+    
+    # HIGHLIGHTタグ付きのメモを優先して結合
+    all_memos = highlighted_memos + normal_memos
+    return "\n".join(all_memos), highlighted_memos
+
 def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=None, custom_prompt_internal=None):
     
     dynamic_examples = get_high_diff_examples(staff_name, limit=3)
@@ -359,6 +383,14 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
     if manual_style:
         manual_instruction = f"【{staff_name}さんの文体見本（コピペ）】\n{manual_style}\n※口調だけ真似てください。"
 
+    # タグ付きメモ情報を取得
+    structured_memos, highlighted_memos = fetch_todays_memos_with_tags(child_name)
+    
+    # HIGHLIGHTタグ付きメモがある場合の追加指示
+    highlight_instruction = ""
+    if highlighted_memos:
+        highlight_instruction = f"\n\n【重要】以下のメモは「印象的な場面」としてタグ付けされています。【印象的だった場面】セクションで優先的に使用してください：\n" + "\n".join(highlighted_memos)
+
     # 保護者用プロンプト作成
     if custom_prompt and custom_prompt.strip():
         guardian_prompt = custom_prompt.format(
@@ -366,10 +398,10 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
             child_name=child_name,
             manual_instruction=manual_instruction,
             dynamic_instruction=dynamic_instruction,
-            memos=memos
+            memos=structured_memos + highlight_instruction
         )
     else:
-        guardian_prompt = get_default_guardian_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos)
+        guardian_prompt = get_default_guardian_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, structured_memos + highlight_instruction)
 
     # 職員用プロンプト作成
     if custom_prompt_internal and custom_prompt_internal.strip():
@@ -378,10 +410,10 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
             child_name=child_name,
             manual_instruction=manual_instruction,
             dynamic_instruction=dynamic_instruction,
-            memos=memos
+            memos=structured_memos
         )
     else:
-        internal_prompt = get_default_internal_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos)
+        internal_prompt = get_default_internal_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, structured_memos)
 
     # 両方のプロンプトを組み合わせてClaudeに送信
     combined_prompt = f"{guardian_prompt}\n\n<<<INTERNAL>>>\n{internal_prompt}"
@@ -566,10 +598,16 @@ with tab1:
                 key=f"edit_transcription_{st.session_state.audio_key - 1}"
             )
             
+            # 印象的な場面タグ付けチェックボックス
+            is_highlight = st.checkbox(
+                "⭐ 印象的な場面としてタグ付け", 
+                key=f"highlight_audio_{st.session_state.audio_key - 1}"
+            )
+            
             col_save, col_cancel = st.columns(2)
             with col_save:
                 if st.button("保存する", type="primary", key=f"save_{st.session_state.audio_key - 1}"):
-                    if transcribed_text and save_memo(child_name, transcribed_text, selected_staff):
+                    if transcribed_text and save_memo(child_name, transcribed_text, selected_staff, is_highlight):
                         st.toast("録音を保存しました", icon="🎙️")
                         del st.session_state[current_transcription_key]
                         st.rerun()
@@ -581,8 +619,13 @@ with tab1:
 
     with col2:
         text_val = st.text_area("補足テキスト", key=f"text_{st.session_state.text_key}", height=100)
+        # 印象的な場面タグ付けチェックボックス
+        is_highlight_text = st.checkbox(
+            "⭐ 印象的な場面としてタグ付け", 
+            key=f"highlight_text_{st.session_state.text_key}"
+        )
         if st.button("追加"):
-            if text_val and save_memo(child_name, text_val, selected_staff):
+            if text_val and save_memo(child_name, text_val, selected_staff, is_highlight_text):
                 st.toast("メモを追加しました", icon="📝")
                 st.session_state.text_key += 1
                 st.rerun()
