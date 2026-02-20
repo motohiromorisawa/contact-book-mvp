@@ -115,7 +115,7 @@ def get_staff_custom_prompt(staff_name):
         return ""
 
 def save_staff_custom_prompt(staff_name, custom_prompt):
-    """スタッフのカスタムプロンプトを保存"""
+    """スタッフのカスタムプロンプト（保護者用）を保存"""
     try:
         service = get_gsp_service()
         sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:D").execute()
@@ -131,6 +131,41 @@ def save_staff_custom_prompt(staff_name, custom_prompt):
         return False
     except Exception as e:
         st.error(f"カスタムプロンプト保存エラー: {str(e)}")
+        return False
+
+def get_staff_custom_prompt_internal(staff_name):
+    """スタッフの内部用カスタムプロンプト（職員用）を取得"""
+    try:
+        service = get_gsp_service()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:E").execute()
+        values = sheet.get('values', [])
+        for row in values:
+            if len(row) > 1 and row[1] == staff_name:
+                if len(row) > 4:
+                    return row[4]  # E列の内部用カスタムプロンプト
+                break
+        return ""
+    except Exception as e:
+        st.error(f"内部用カスタムプロンプト取得エラー: {str(e)}")
+        return ""
+
+def save_staff_custom_prompt_internal(staff_name, custom_prompt_internal):
+    """スタッフの内部用カスタムプロンプト（職員用）を保存"""
+    try:
+        service = get_gsp_service()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:E").execute()
+        values = sheet.get('values', [])
+        update_index = -1
+        for i, row in enumerate(values):
+            if len(row) > 1 and row[1] == staff_name:
+                update_index = i; break
+        if update_index != -1:
+            body = {'values': [[custom_prompt_internal]]}
+            service.spreadsheets().values().update(spreadsheetId=SPREADSHEET_ID, range=f"member!E{update_index + 1}", valueInputOption="USER_ENTERED", body=body).execute()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"内部用カスタムプロンプト保存エラー: {str(e)}")
         return False
 
 def get_high_diff_examples(staff_name, limit=3):
@@ -250,8 +285,8 @@ def transcribe_audio(audio_file):
 # 3. 生成ロジック（主観・想い対応版）
 # ---------------------------------------------------------
 
-def get_default_system_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos):
-    """デフォルトのシステムプロンプトを返す"""
+def get_default_guardian_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos):
+    """デフォルトの保護者用プロンプトを返す"""
     return f"""
     あなたは放課後等デイサービスの熟練スタッフ「{staff_name}」です。
     提供された「活動中の会話ログ」や「メモ」から、保護者への連絡帳を作成します。
@@ -289,13 +324,30 @@ def get_default_system_prompt(child_name, staff_name, manual_instruction, dynami
 
     【ご連絡】
     [あれば]
-
-    <<<INTERNAL>>>
-    【職員間申し送り】
-    [内部共有事項]
     """
 
-def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=None):
+def get_default_internal_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos):
+    """デフォルトの職員用（申し送り）プロンプトを返す"""
+    return f"""
+    【職員間申し送り】
+    以下の内容を含めて職員間の申し送り事項を作成してください：
+
+    # 申し送り内容
+    1. **支援のポイント**: 今日の支援で特に注意したこと
+    2. **行動の特徴**: 普段と違った行動や気になる点
+    3. **配慮事項**: 明日以降の支援で気をつけるべきこと
+    4. **保護者への報告事項**: 伝える必要がある事項があれば
+
+    # 入力データ
+    {memos}
+
+    # 文体・スタイル
+    {manual_instruction}
+
+    {dynamic_instruction}
+    """
+
+def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=None, custom_prompt_internal=None):
     
     dynamic_examples = get_high_diff_examples(staff_name, limit=3)
     dynamic_instruction = ""
@@ -307,9 +359,9 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
     if manual_style:
         manual_instruction = f"【{staff_name}さんの文体見本（コピペ）】\n{manual_style}\n※口調だけ真似てください。"
 
-    # カスタムプロンプトがあればそれを使用、なければデフォルトを使用
+    # 保護者用プロンプト作成
     if custom_prompt and custom_prompt.strip():
-        system_prompt = custom_prompt.format(
+        guardian_prompt = custom_prompt.format(
             staff_name=staff_name,
             child_name=child_name,
             manual_instruction=manual_instruction,
@@ -317,12 +369,27 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
             memos=memos
         )
     else:
-        system_prompt = get_default_system_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos)
+        guardian_prompt = get_default_guardian_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos)
+
+    # 職員用プロンプト作成
+    if custom_prompt_internal and custom_prompt_internal.strip():
+        internal_prompt = custom_prompt_internal.format(
+            staff_name=staff_name,
+            child_name=child_name,
+            manual_instruction=manual_instruction,
+            dynamic_instruction=dynamic_instruction,
+            memos=memos
+        )
+    else:
+        internal_prompt = get_default_internal_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos)
+
+    # 両方のプロンプトを組み合わせてClaudeに送信
+    combined_prompt = f"{guardian_prompt}\n\n<<<INTERNAL>>>\n{internal_prompt}"
 
     try:
         message = anthropic_client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=2000, temperature=0.3, system=system_prompt,
+            max_tokens=2000, temperature=0.3, system=combined_prompt,
             messages=[{"role": "user", "content": "下書きを作成してください"}]
         )
         return message.content[0].text
@@ -348,14 +415,14 @@ with st.sidebar:
         if save_staff_profile(selected_staff, style_input): st.toast("保存しました")
     
     st.divider()
-    with st.expander("**🎯 プロンプト編集**"):
-        st.markdown("システムプロンプトをカスタマイズできます")
+    with st.expander("**🎯 保護者用プロンプト編集**"):
+        st.markdown("保護者向け連絡帳のシステムプロンプトをカスタマイズできます")
         
         # 現在保存されているカスタムプロンプトを取得
         saved_custom_prompt = get_staff_custom_prompt(selected_staff)
         
-        # デフォルトプロンプトの生成（変数展開なし版）
-        default_prompt_template = """
+        # デフォルト保護者用プロンプトの生成
+        default_guardian_prompt_template = """
     あなたは放課後等デイサービスの熟練スタッフ「{staff_name}」です。
     提供された「活動中の会話ログ」や「メモ」から、保護者への連絡帳を作成します。
 
@@ -392,32 +459,76 @@ with st.sidebar:
 
     【ご連絡】
     [あれば]
-
-    <<<INTERNAL>>>
-    【職員間申し送り】
-    [内部共有事項]
     """
         
         # デフォルト値の設定
-        prompt_value = saved_custom_prompt if saved_custom_prompt else default_prompt_template.strip()
+        prompt_value = saved_custom_prompt if saved_custom_prompt else default_guardian_prompt_template.strip()
         
         custom_prompt_input = st.text_area(
-            "カスタムプロンプト",
+            "保護者用カスタムプロンプト",
             value=prompt_value,
-            height=400,
-            help="空にするとデフォルトプロンプトが使用されます。{staff_name}, {child_name}, {manual_instruction}, {dynamic_instruction}, {memos}の変数が利用可能です。"
+            height=300,
+            help="空にするとデフォルト保護者用プロンプトが使用されます。{staff_name}, {child_name}, {manual_instruction}, {dynamic_instruction}, {memos}の変数が利用可能です。"
         )
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("プロンプトを保存", type="primary"):
+            if st.button("保護者用プロンプトを保存", type="primary"):
                 if save_staff_custom_prompt(selected_staff, custom_prompt_input):
-                    st.toast("プロンプトを保存しました")
+                    st.toast("保護者用プロンプトを保存しました")
                     
         with col2:
-            if st.button("デフォルトに戻す"):
+            if st.button("保護者用をデフォルトに戻す"):
                 if save_staff_custom_prompt(selected_staff, ""):
-                    st.toast("デフォルトプロンプトに戻しました")
+                    st.toast("保護者用をデフォルトプロンプトに戻しました")
+                    st.rerun()
+
+    with st.expander("**👥 職員用プロンプト編集（申し送り）**"):
+        st.markdown("職員間申し送りのシステムプロンプトをカスタマイズできます")
+        
+        # 現在保存されている内部用カスタムプロンプトを取得
+        saved_custom_prompt_internal = get_staff_custom_prompt_internal(selected_staff)
+        
+        # デフォルト職員用プロンプトの生成
+        default_internal_prompt_template = """
+    【職員間申し送り】
+    以下の内容を含めて職員間の申し送り事項を作成してください：
+
+    # 申し送り内容
+    1. **支援のポイント**: 今日の支援で特に注意したこと
+    2. **行動の特徴**: 普段と違った行動や気になる点
+    3. **配慮事項**: 明日以降の支援で気をつけるべきこと
+    4. **保護者への報告事項**: 伝える必要がある事項があれば
+
+    # 入力データ
+    {memos}
+
+    # 文体・スタイル
+    {manual_instruction}
+
+    {dynamic_instruction}
+    """
+        
+        # デフォルト値の設定
+        prompt_internal_value = saved_custom_prompt_internal if saved_custom_prompt_internal else default_internal_prompt_template.strip()
+        
+        custom_prompt_internal_input = st.text_area(
+            "職員用カスタムプロンプト",
+            value=prompt_internal_value,
+            height=300,
+            help="空にするとデフォルト職員用プロンプトが使用されます。{staff_name}, {child_name}, {manual_instruction}, {dynamic_instruction}, {memos}の変数が利用可能です。"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("職員用プロンプトを保存", type="primary"):
+                if save_staff_custom_prompt_internal(selected_staff, custom_prompt_internal_input):
+                    st.toast("職員用プロンプトを保存しました")
+                    
+        with col2:
+            if st.button("職員用をデフォルトに戻す"):
+                if save_staff_custom_prompt_internal(selected_staff, ""):
+                    st.toast("職員用をデフォルトプロンプトに戻しました")
                     st.rerun()
 
 st.title("連絡帳メーカー")
@@ -503,9 +614,10 @@ with tab2:
                 st.error("記録がありません")
             else:
                 with st.spinner("会話ログから執筆中（事実と感想を整理しています...）"):
-                    # カスタムプロンプトを取得
+                    # カスタムプロンプトを取得（保護者用・職員用両方）
                     custom_prompt = get_staff_custom_prompt(selected_staff)
-                    draft = generate_draft(child_name, memos, selected_staff, style_input, custom_prompt)
+                    custom_prompt_internal = get_staff_custom_prompt_internal(selected_staff)
+                    draft = generate_draft(child_name, memos, selected_staff, style_input, custom_prompt, custom_prompt_internal)
                     st.session_state.ai_draft = draft
                     # ★新機能: AIドラフトを一時保存（ページ再読み込み対応）
                     try:
