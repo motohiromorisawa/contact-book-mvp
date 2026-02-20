@@ -98,6 +98,41 @@ def save_staff_profile(staff_name, profile_text):
         st.error(f"プロファイル保存エラー: {str(e)}")
         return False
 
+def get_staff_custom_prompt(staff_name):
+    """スタッフのカスタムプロンプトを取得"""
+    try:
+        service = get_gsp_service()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:D").execute()
+        values = sheet.get('values', [])
+        for row in values:
+            if len(row) > 1 and row[1] == staff_name:
+                if len(row) > 3:
+                    return row[3]  # D列のカスタムプロンプト
+                break
+        return ""
+    except Exception as e:
+        st.error(f"カスタムプロンプト取得エラー: {str(e)}")
+        return ""
+
+def save_staff_custom_prompt(staff_name, custom_prompt):
+    """スタッフのカスタムプロンプトを保存"""
+    try:
+        service = get_gsp_service()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="member!A:D").execute()
+        values = sheet.get('values', [])
+        update_index = -1
+        for i, row in enumerate(values):
+            if len(row) > 1 and row[1] == staff_name:
+                update_index = i; break
+        if update_index != -1:
+            body = {'values': [[custom_prompt]]}
+            service.spreadsheets().values().update(spreadsheetId=SPREADSHEET_ID, range=f"member!D{update_index + 1}", valueInputOption="USER_ENTERED", body=body).execute()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"カスタムプロンプト保存エラー: {str(e)}")
+        return False
+
 def get_high_diff_examples(staff_name, limit=3):
     try:
         service = get_gsp_service()
@@ -214,19 +249,10 @@ def transcribe_audio(audio_file):
 # ---------------------------------------------------------
 # 3. 生成ロジック（主観・想い対応版）
 # ---------------------------------------------------------
-def generate_draft(child_name, memos, staff_name, manual_style):
-    
-    dynamic_examples = get_high_diff_examples(staff_name, limit=3)
-    dynamic_instruction = ""
-    if dynamic_examples:
-        examples_str = "\n\n".join([f"---修正例{i+1}---\n{ex}" for i, ex in enumerate(dynamic_examples)])
-        dynamic_instruction = f"【{staff_name}さんの過去の修正パターン】\n{examples_str}"
 
-    manual_instruction = ""
-    if manual_style:
-        manual_instruction = f"【{staff_name}さんの文体見本（コピペ）】\n{manual_style}\n※口調だけ真似てください。"
-
-    system_prompt = f"""
+def get_default_system_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos):
+    """デフォルトのシステムプロンプトを返す"""
+    return f"""
     あなたは放課後等デイサービスの熟練スタッフ「{staff_name}」です。
     提供された「活動中の会話ログ」や「メモ」から、保護者への連絡帳を作成します。
 
@@ -269,6 +295,30 @@ def generate_draft(child_name, memos, staff_name, manual_style):
     [内部共有事項]
     """
 
+def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=None):
+    
+    dynamic_examples = get_high_diff_examples(staff_name, limit=3)
+    dynamic_instruction = ""
+    if dynamic_examples:
+        examples_str = "\n\n".join([f"---修正例{i+1}---\n{ex}" for i, ex in enumerate(dynamic_examples)])
+        dynamic_instruction = f"【{staff_name}さんの過去の修正パターン】\n{examples_str}"
+
+    manual_instruction = ""
+    if manual_style:
+        manual_instruction = f"【{staff_name}さんの文体見本（コピペ）】\n{manual_style}\n※口調だけ真似てください。"
+
+    # カスタムプロンプトがあればそれを使用、なければデフォルトを使用
+    if custom_prompt and custom_prompt.strip():
+        system_prompt = custom_prompt.format(
+            staff_name=staff_name,
+            child_name=child_name,
+            manual_instruction=manual_instruction,
+            dynamic_instruction=dynamic_instruction,
+            memos=memos
+        )
+    else:
+        system_prompt = get_default_system_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, memos)
+
     try:
         message = anthropic_client.messages.create(
             model="claude-sonnet-4-5-20250929",
@@ -296,6 +346,79 @@ with st.sidebar:
     style_input = st.text_area("過去の連絡帳（コピペ用）", value=saved_profile, height=200)
     if st.button("設定を保存"):
         if save_staff_profile(selected_staff, style_input): st.toast("保存しました")
+    
+    st.divider()
+    with st.expander("**🎯 プロンプト編集**"):
+        st.markdown("システムプロンプトをカスタマイズできます")
+        
+        # 現在保存されているカスタムプロンプトを取得
+        saved_custom_prompt = get_staff_custom_prompt(selected_staff)
+        
+        # デフォルトプロンプトの生成（変数展開なし版）
+        default_prompt_template = """
+    あなたは放課後等デイサービスの熟練スタッフ「{staff_name}」です。
+    提供された「活動中の会話ログ」や「メモ」から、保護者への連絡帳を作成します。
+
+    # 名前に関する絶対ルール（最優先）
+    1. **正解の名前**: 対象児童の名前は必ず「{child_name}」と表記してください。
+    2. **表記ゆれの強制修正**: 
+       - 入力ログ内で、読みが同じ別の漢字（例：「太朗」→「太郎」）や、あだ名（例：「たっくん」）が使われていても、出力時はすべてシステム登録名の「{child_name}」に統一してください。
+       - 会話ログの漢字変換は間違っている前提で処理してください。
+
+    # 記述の方針
+    1. **事実と感想の区別**: 事実（何をしたか）と感想（どう感じたか）を区別する。
+    2. **主観（Iメッセージ）**: 「〜という姿に成長を感じました」等のスタッフの主観・想いを一言添える。
+    3. **会話からの変換**: 「すごいね！」等の発言は、「〜と声をかけると」のように状況描写に変換する。
+
+    # 文体・スタイル
+    {manual_instruction}
+
+    {dynamic_instruction}
+
+    # 入力データ
+    {memos}
+
+    # 出力構成
+    【今日の{child_name}】
+    （一言で）
+
+    【活動内容】
+    ・[活動1]
+    ・[活動2]
+
+    【印象的だった場面】
+    [具体的なエピソード（事実）]
+    [★関連するスタッフの感想・主観を一言添える]
+
+    【ご連絡】
+    [あれば]
+
+    <<<INTERNAL>>>
+    【職員間申し送り】
+    [内部共有事項]
+    """
+        
+        # デフォルト値の設定
+        prompt_value = saved_custom_prompt if saved_custom_prompt else default_prompt_template.strip()
+        
+        custom_prompt_input = st.text_area(
+            "カスタムプロンプト",
+            value=prompt_value,
+            height=400,
+            help="空にするとデフォルトプロンプトが使用されます。{staff_name}, {child_name}, {manual_instruction}, {dynamic_instruction}, {memos}の変数が利用可能です。"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("プロンプトを保存", type="primary"):
+                if save_staff_custom_prompt(selected_staff, custom_prompt_input):
+                    st.toast("プロンプトを保存しました")
+                    
+        with col2:
+            if st.button("デフォルトに戻す"):
+                if save_staff_custom_prompt(selected_staff, ""):
+                    st.toast("デフォルトプロンプトに戻しました")
+                    st.rerun()
 
 st.title("連絡帳メーカー")
 st.markdown(f'<div class="current-staff">👤 担当者: {selected_staff}</div>', unsafe_allow_html=True)
@@ -380,7 +503,9 @@ with tab2:
                 st.error("記録がありません")
             else:
                 with st.spinner("会話ログから執筆中（事実と感想を整理しています...）"):
-                    draft = generate_draft(child_name, memos, selected_staff, style_input)
+                    # カスタムプロンプトを取得
+                    custom_prompt = get_staff_custom_prompt(selected_staff)
+                    draft = generate_draft(child_name, memos, selected_staff, style_input, custom_prompt)
                     st.session_state.ai_draft = draft
                     # ★新機能: AIドラフトを一時保存（ページ再読み込み対応）
                     try:
