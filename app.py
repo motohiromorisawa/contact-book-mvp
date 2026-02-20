@@ -129,6 +129,15 @@ def save_final_report(child_name, ai_draft, final_text, next_hint, staff_name):
     service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G", valueInputOption="USER_ENTERED", body=body).execute()
     return True
 
+def save_ai_draft_temp(child_name, ai_draft, staff_name):
+    """AIドラフトを一時保存（未確定状態）"""
+    service = get_gsp_service()
+    now = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+    # 本文を空にして、AIドラフトのみ保存（未確定状態を表す）
+    body = {'values': [[now, child_name, "", "REPORT", staff_name, "", ai_draft]]}
+    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G", valueInputOption="USER_ENTERED", body=body).execute()
+    return True
+
 def fetch_todays_memos(child_name):
     """当日のメモ一覧を取得"""
     service = get_gsp_service()
@@ -165,6 +174,34 @@ def get_todays_report(child_name):
     except Exception as e:
         st.error(f"今日のレポート取得エラー: {str(e)}")
         return None, None
+
+def get_todays_ai_draft(child_name):
+    """
+    当日の未確定AIドラフトがあれば取得して返す（ページ再読み込み対応）
+    戻り値: ai_draft文字列 または None
+    """
+    try:
+        service = get_gsp_service()
+        # G列（AIドラフト）も含めて全取得
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:G").execute()
+        rows = sheet.get('values', [])
+        today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
+        
+        # 後ろから走査して、今日の最新のAIドラフト（未確定）を探す
+        for row in reversed(rows):
+            if len(row) >= 7:
+                # 日付一致 AND 名前一致 AND タイプがREPORT AND AIドラフトが存在
+                if (row[0].startswith(today_str) and 
+                    row[1] == child_name and 
+                    row[3] == "REPORT" and 
+                    row[6]):  # G列（AIドラフト）に内容がある
+                    # 本文（C列）が空または極短い場合は未確定と判断
+                    if not row[2] or len(row[2].strip()) < 10:
+                        return row[6]  # AIドラフトを返す
+        return None
+    except Exception as e:
+        st.error(f"今日のAIドラフト取得エラー: {str(e)}")
+        return None
 
 def transcribe_audio(audio_file):
     try:
@@ -302,6 +339,13 @@ with tab2:
     # ★重要変更: 児童が選択された時点で、既に保存されたレポートがあるか確認する
     # これにより、別の子の入力後に戻ってきてもデータが消えない
     existing_public, existing_internal = get_todays_report(child_name)
+    
+    # ★新機能: セッション状態が空の場合、Google Sheetsから未確定AIドラフトを復元
+    if not st.session_state.ai_draft and not existing_public:
+        restored_draft = get_todays_ai_draft(child_name)
+        if restored_draft:
+            st.session_state.ai_draft = restored_draft
+            st.info("📄 以前作成したAIドラフトを復元しました")
 
     # A. 既に本日のレポートが存在する場合（コピペ画面を表示）
     if existing_public:
@@ -338,6 +382,11 @@ with tab2:
                 with st.spinner("会話ログから執筆中（事実と感想を整理しています...）"):
                     draft = generate_draft(child_name, memos, selected_staff, style_input)
                     st.session_state.ai_draft = draft
+                    # ★新機能: AIドラフトを一時保存（ページ再読み込み対応）
+                    try:
+                        save_ai_draft_temp(child_name, draft, selected_staff)
+                    except Exception as e:
+                        st.error(f"ドラフト一時保存エラー: {str(e)}")
 
         if st.session_state.ai_draft:
             st.divider()
