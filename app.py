@@ -50,6 +50,7 @@ if "ANTHROPIC_API_KEY" in st.secrets: anthropic_client = anthropic.Anthropic(api
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = st.secrets["GCP_SPREADSHEET_ID"]
 
+@st.cache_resource
 def get_gsp_service():
     creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
     return build('sheets', 'v4', credentials=creds)
