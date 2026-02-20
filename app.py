@@ -285,7 +285,7 @@ with tab1:
                 st.rerun()
 
     with col2:
-        text_val = st.text_input("補足テキスト", key=f"text_{st.session_state.text_key}")
+        text_val = st.text_area("補足テキスト", key=f"text_{st.session_state.text_key}", height=100)
         if st.button("追加"):
             if text_val and save_memo(child_name, text_val, selected_staff):
                 st.toast("メモを追加しました", icon="📝")
