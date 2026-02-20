@@ -275,6 +275,39 @@ def get_todays_ai_draft(child_name):
         st.error(f"今日のAIドラフト取得エラー: {str(e)}")
         return None
 
+def get_past_reports(child_name, limit=3):
+    """
+    その児童の過去の連絡帳を新しい順に最大limit件取得（当日分は除外）
+    戻り値: 過去の連絡帳テキストのリスト
+    """
+    try:
+        service = get_gsp_service()
+        sheet = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range="Sheet1!A:H").execute()
+        rows = sheet.get('values', [])
+        today_str = datetime.datetime.now(JST).strftime("%Y-%m-%d")
+        
+        # 該当児童のREPORTレコードを抽出（当日以外かつ本文が存在するもの）
+        past_reports = []
+        for row in rows:
+            if (len(row) >= 4 and 
+                row[1] == child_name and 
+                row[3] == "REPORT" and 
+                not row[0].startswith(today_str) and  # 当日分は除外
+                len(row) >= 3 and row[2] and len(row[2].strip()) > 10):  # 本文が存在
+                past_reports.append({
+                    'timestamp': row[0],
+                    'text': row[2]
+                })
+        
+        # タイムスタンプでソート（新しい順）
+        past_reports.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        # 最大limit件まで取得してテキストのみ返す
+        return [report['text'] for report in past_reports[:limit]]
+    except Exception as e:
+        st.error(f"過去の連絡帳取得エラー: {str(e)}")
+        return []
+
 def transcribe_audio(audio_file):
     try:
         transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
@@ -371,7 +404,7 @@ def fetch_todays_memos_with_tags(child_name):
     all_memos = highlighted_memos + normal_memos
     return "\n".join(all_memos), highlighted_memos
 
-def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=None, custom_prompt_internal=None):
+def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=None, custom_prompt_internal=None, past_reports=None):
     
     dynamic_examples = get_high_diff_examples(staff_name, limit=3)
     dynamic_instruction = ""
@@ -391,6 +424,12 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
     if highlighted_memos:
         highlight_instruction = f"\n\n【重要】以下のメモは「印象的な場面」としてタグ付けされています。【印象的だった場面】セクションで優先的に使用してください：\n" + "\n".join(highlighted_memos)
 
+    # 過去の連絡帳を文脈として追加
+    past_reports_instruction = ""
+    if past_reports:
+        past_reports_str = "\n\n".join([f"---過去の連絡帳{i+1}---\n{report}" for i, report in enumerate(past_reports)])
+        past_reports_instruction = f"\n\n【過去の連絡帳（文脈参考用）】\n{past_reports_str}\n\n※過去との比較表現（「先週より」「以前と比べて」など）は使わない。ただし過去の記録から読み取れるその子の特徴・傾向・言葉遣いの癖を踏まえて、今日のエピソードをより具体的・自然に書くこと。"
+
     # 保護者用プロンプト作成
     if custom_prompt and custom_prompt.strip():
         guardian_prompt = custom_prompt.format(
@@ -398,10 +437,10 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
             child_name=child_name,
             manual_instruction=manual_instruction,
             dynamic_instruction=dynamic_instruction,
-            memos=structured_memos + highlight_instruction
+            memos=structured_memos + highlight_instruction + past_reports_instruction
         )
     else:
-        guardian_prompt = get_default_guardian_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, structured_memos + highlight_instruction)
+        guardian_prompt = get_default_guardian_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, structured_memos + highlight_instruction + past_reports_instruction)
 
     # 職員用プロンプト作成
     if custom_prompt_internal and custom_prompt_internal.strip():
@@ -410,10 +449,10 @@ def generate_draft(child_name, memos, staff_name, manual_style, custom_prompt=No
             child_name=child_name,
             manual_instruction=manual_instruction,
             dynamic_instruction=dynamic_instruction,
-            memos=structured_memos
+            memos=structured_memos + past_reports_instruction
         )
     else:
-        internal_prompt = get_default_internal_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, structured_memos)
+        internal_prompt = get_default_internal_prompt(child_name, staff_name, manual_instruction, dynamic_instruction, structured_memos + past_reports_instruction)
 
     # 両方のプロンプトを組み合わせてClaudeに送信
     combined_prompt = f"{guardian_prompt}\n\n<<<INTERNAL>>>\n{internal_prompt}"
@@ -681,10 +720,12 @@ with tab2:
                 st.error("記録がありません")
             else:
                 with st.spinner("会話ログから執筆中（事実と感想を整理しています...）"):
+                    # 過去の連絡帳を取得（最新3件）
+                    past_reports = get_past_reports(child_name, limit=3)
                     # カスタムプロンプトを取得（保護者用・職員用両方）
                     custom_prompt = get_staff_custom_prompt(selected_staff)
                     custom_prompt_internal = get_staff_custom_prompt_internal(selected_staff)
-                    draft = generate_draft(child_name, memos, selected_staff, style_input, custom_prompt, custom_prompt_internal)
+                    draft = generate_draft(child_name, memos, selected_staff, style_input, custom_prompt, custom_prompt_internal, past_reports)
                     st.session_state.ai_draft = draft
                     # ★新機能: AIドラフトを一時保存（ページ再読み込み対応）
                     try:
