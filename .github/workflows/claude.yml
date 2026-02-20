@@ -29,10 +29,13 @@ jobs:
           git fetch --all
           BRANCH=$(git branch -r --list 'origin/claude/*' --sort=-committerdate | head -1 | sed 's|origin/||')
           if [ -n "$BRANCH" ]; then
-            gh pr create \
-              --base main \
-              --head "$BRANCH" \
-              --title "Claude Code: $BRANCH" \
-              --body "Auto-created PR from branch \`$BRANCH\`." \
-              --repo "$GITHUB_REPOSITORY" || true
+            COMMIT_COUNT=$(git rev-list --count origin/main..origin/$BRANCH 2>/dev/null || echo 0)
+            if [ "$COMMIT_COUNT" -gt 0 ]; then
+              gh pr create \
+                --base main \
+                --head "$BRANCH" \
+                --title "Claude Code: $BRANCH" \
+                --body "Auto-created PR from branch \`$BRANCH\`." \
+                --repo "$GITHUB_REPOSITORY" || true
+            fi
           fi
