@@ -550,10 +550,34 @@ with tab1:
         if audio:
             with st.spinner("会話を分析中..."):
                 text = transcribe_audio(audio)
-            if text and save_memo(child_name, text, selected_staff):
-                st.toast("録音を保存しました", icon="🎙️")
+            if text:
+                # 文字起こし結果を確認・編集用のセッション状態に保存
+                st.session_state[f"transcribed_text_{st.session_state.audio_key}"] = text
                 st.session_state.audio_key += 1
                 st.rerun()
+        
+        # 文字起こし結果の確認・編集エリア
+        current_transcription_key = f"transcribed_text_{st.session_state.audio_key - 1}"
+        if current_transcription_key in st.session_state:
+            transcribed_text = st.text_area(
+                "文字起こし結果（編集可能）",
+                value=st.session_state[current_transcription_key],
+                height=150,
+                key=f"edit_transcription_{st.session_state.audio_key - 1}"
+            )
+            
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("保存する", type="primary", key=f"save_{st.session_state.audio_key - 1}"):
+                    if transcribed_text and save_memo(child_name, transcribed_text, selected_staff):
+                        st.toast("録音を保存しました", icon="🎙️")
+                        del st.session_state[current_transcription_key]
+                        st.rerun()
+                        
+            with col_cancel:
+                if st.button("キャンセル", key=f"cancel_{st.session_state.audio_key - 1}"):
+                    del st.session_state[current_transcription_key]
+                    st.rerun()
 
     with col2:
         text_val = st.text_area("補足テキスト", key=f"text_{st.session_state.text_key}", height=100)
