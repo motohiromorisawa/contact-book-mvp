@@ -32,7 +32,7 @@ jobs:
             gh pr create \
               --base main \
               --head "$BRANCH" \
-              --title "$(git log origin/$BRANCH -1 --pretty=%s)" \
+              --title "Claude Code: $BRANCH" \
               --body "Auto-created PR from branch \`$BRANCH\`." \
               --repo "$GITHUB_REPOSITORY" || true
           fi
