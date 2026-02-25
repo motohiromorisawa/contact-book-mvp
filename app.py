@@ -629,7 +629,6 @@ with st.sidebar:
 
 st.title("連絡帳メーカー")
 st.markdown(f'<div class="current-staff">👤 担当者: {selected_staff}</div>', unsafe_allow_html=True)
-child_name = st.selectbox("対象児童", child_list)
 
 tab1, tab2 = st.tabs(["1. 録音・記録", "2. 作成・出力"])
 
@@ -638,11 +637,19 @@ with tab1:
     if "audio_key" not in st.session_state: st.session_state.audio_key = 0
     if "text_key" not in st.session_state: st.session_state.text_key = 0
 
-    st.info("💡 活動中に録音ボタンを押して、会話や様子を記録してください。")
+    # 録音エリア（中央配置）
+    st.markdown("**タップして録音開始 → もう一度タップで停止（最大60秒）**", 
+               help="録音ボタンを押すと録音が開始され、もう一度押すと停止します")
+    audio = st.audio_input("🎙️ 会話・様子を録音", key=f"audio_{st.session_state.audio_key}", 
+                          help="録音ボタンを押して開始、もう一度押して停止")
+    
+    # 児童選択（録音エリアの下に配置）
+    child_name = st.selectbox("対象児童", child_list, 
+                             help="録音後に対象の児童を選択してください")
 
     col1, col2 = st.columns(2)
     with col1:
-        audio = st.audio_input("会話・様子を録音", key=f"audio_{st.session_state.audio_key}")
+        # 録音処理
         if audio:
             with st.spinner("会話を分析中..."):
                 # get_lists_and_profileから児童名リストを取得
@@ -672,7 +679,11 @@ with tab1:
             
             col_save, col_cancel = st.columns(2)
             with col_save:
-                if st.button("保存する", type="primary", key=f"save_{st.session_state.audio_key - 1}"):
+                # 保存ボタンは児童が選択されている場合のみ活性化
+                save_disabled = not child_name
+                if st.button("保存する", type="primary", key=f"save_{st.session_state.audio_key - 1}", 
+                           disabled=save_disabled, 
+                           help="児童を選択してから保存してください" if save_disabled else None):
                     if transcribed_text and save_memo(child_name, transcribed_text, selected_staff, is_highlight):
                         st.toast("録音を保存しました", icon="🎙️")
                         del st.session_state[current_transcription_key]
@@ -690,7 +701,10 @@ with tab1:
             "⭐ 印象的な場面としてタグ付け", 
             key=f"highlight_text_{st.session_state.text_key}"
         )
-        if st.button("追加"):
+        # テキストメモの保存ボタンも児童が選択されている場合のみ活性化
+        memo_disabled = not child_name
+        if st.button("追加", disabled=memo_disabled, 
+                    help="児童を選択してからメモを追加してください" if memo_disabled else None):
             if text_val and save_memo(child_name, text_val, selected_staff, is_highlight_text):
                 st.toast("メモを追加しました", icon="📝")
                 st.session_state.text_key += 1
