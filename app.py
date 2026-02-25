@@ -308,9 +308,34 @@ def get_past_reports(child_name, limit=3):
         st.error(f"過去の連絡帳取得エラー: {str(e)}")
         return []
 
-def transcribe_audio(audio_file):
+def transcribe_audio(audio_file, child_names: list = None):
     try:
-        transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
+        # prompt生成: 児童名リストと放課後等デイサービスでよく使われる語彙
+        prompt_parts = []
+        
+        # 児童名リストを追加
+        if child_names:
+            child_names_str = "、".join(child_names)
+            prompt_parts.append(f"児童名: {child_names_str}")
+        
+        # 放課後等デイサービスでよく使われる語彙
+        common_vocab = [
+            "活動", "製作", "おやつ", "公園", "制作", "工作", "ブロック",
+            "パズル", "粘土", "プリント", "着替え", "トイレ", "手洗い"
+        ]
+        vocab_str = "、".join(common_vocab)
+        prompt_parts.append(f"よく使われる語彙: {vocab_str}")
+        
+        # promptを結合
+        prompt = "。".join(prompt_parts) + "。"
+        
+        # Whisper API呼び出しにpromptパラメータを追加
+        transcript = openai.audio.transcriptions.create(
+            model="whisper-1", 
+            file=audio_file, 
+            language="ja",
+            prompt=prompt
+        )
         return transcript.text
     except Exception as e:
         st.error(f"音声転写エラー: {str(e)}")
@@ -620,7 +645,9 @@ with tab1:
         audio = st.audio_input("会話・様子を録音", key=f"audio_{st.session_state.audio_key}")
         if audio:
             with st.spinner("会話を分析中..."):
-                text = transcribe_audio(audio)
+                # get_lists_and_profileから児童名リストを取得
+                child_names, _, _ = get_lists_and_profile()
+                text = transcribe_audio(audio, child_names)
             if text:
                 # 文字起こし結果を確認・編集用のセッション状態に保存
                 st.session_state[f"transcribed_text_{st.session_state.audio_key}"] = text
